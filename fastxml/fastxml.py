@@ -1,9 +1,6 @@
-import json
 import multiprocessing
-import sys
-import math
 import time
-from itertools import islice, chain, repeat
+from itertools import islice, repeat
 from collections import Counter, OrderedDict, deque
 
 import numpy as np
@@ -11,10 +8,8 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 from sklearn.svm import LinearSVC
-from sklearn.feature_extraction import FeatureHasher
 
-MAX_LABELS = 15000000
-LOGS = (1 / np.arange(2, MAX_LABELS + 2, dtype='float32'))
+from .splitter import split_node
 
 class Node(object):
     def __init__(self, left, right, clf):
@@ -39,22 +34,6 @@ class MNode(Node):
 class Leaf(object):
     def __init__(self, probs):
         self.probs = probs
-
-def ndcg(order, ls):
-    score = idcg = 0
-    for i, l in enumerate(ls):
-        idcg += 1 / math.log(2+i)
-        if l in order:
-            score += 1 / math.log(order[l] + 2)
-
-    return score / idcg
-
-def dcg(order, ls):
-    """
-    We only need to use DCG since we're only using it to determine which partition
-    bucket the label set in
-    """
-    return sum(LOGS[order[l]] for l in ls if l in order)
 
 def stack(X):
     stacker = np.vstack if isinstance(X[0], np.ndarray) else sp.vstack
@@ -132,59 +111,8 @@ class FastXML(object):
         it = (yi for i in idxs for yi in y[i])
         return Counter(it)
 
-    def order_labels(self, y, idxs):
-        counter = self.count_labels(y, idxs)
-        sLabels = sorted(counter.keys(), key=lambda x: counter[x], reverse=True)
-        return {l: i for i, l in enumerate(sLabels)}
-
-    @staticmethod
-    def divide(y, idxs, lOrder, rOrder):
-        newLeft, newRight = [], []
-        for i in idxs:
-            lNdcg = dcg(lOrder, y[i])
-            rNdcg = dcg(rOrder, y[i])
-            if lNdcg >= rNdcg:
-                newLeft.append(i)
-            else:
-                newRight.append(i)
-
-        return newLeft, newRight
-
     def split_node(self, X, y, idxs, rs):
-        if len(idxs) > 1000:
-            print "Splitting: {}".format(len(idxs))
-
-        if self.even_split:
-            ix = idxs[:]
-            rs.shuffle(ix)
-            left = ix[:len(ix)/2]
-            right = ix[len(ix)/2:]
-        else:
-            left, right = [], []
-            for i in idxs:
-                (left if rs.rand() < 0.5 else right).append(i)
-
-        iterations = 0
-        while True:
-            if len(idxs) > 1000:
-                print "Iterations", iterations
-            iterations += 1
-
-            # Build ndcg for the sides
-            lOrder = self.order_labels(y, left)
-            rOrder = self.order_labels(y, right)
-
-            # Divide out the sides
-            left1, right1 = self.divide(y, left, lOrder, rOrder)
-            left2, right2 = self.divide(y, right, lOrder, rOrder)
-            if not right1 and not left2:
-                # Done!
-                break
-
-            left = left1 + left2
-            right = right1 + right2
-
-        return left, right
+        return split_node(y, idxs, rs, self.even_split)
 
     def compute_probs(self, y, idxs):
         counter = self.count_labels(y, idxs)
@@ -329,62 +257,4 @@ class FastXML(object):
 
         self.roots = finished
 
-def sliding(it, window):
-    x = list(islice(it, window))
-    try:
-        if len(x) == window:
-            while True:
-                yield x
-                x2 = x[1:]
-                x2.append(next(it))
-                x = x2
 
-    except StopIteration:
-        pass
-
-class Quantizer(object):
-    def __init__(self):
-        self.fh = FeatureHasher(dtype='float64')
-
-    def quantize(self, text):
-        text = text.lower().replace(',', '')
-        unigrams = text.split()
-        bigrams = (' '.join(xs) for xs in sliding(iter(unigrams), 2))
-        trigrams = (' '.join(xs) for xs in sliding(iter(unigrams), 3))
-        
-        d = {f: 1.0 for f in chain(unigrams, bigrams, trigrams)}
-        return self.fh.transform([d])
-
-def quantize(fname, quantizer):
-    with file(fname) as f:
-        for i, line in enumerate(f):
-            if i % 10000 == 0:
-                print "%s docs encoded" % i
-
-            data = json.loads(line)
-            X = quantizer.quantize(data['title'])
-            y = data['tags']
-            yield X, y
-
-def main(train, test):
-    quantizer = Quantizer()
-    X_train, y_train = [], []
-    for X, y in quantize(train, quantizer):
-        X_train.append(X)
-        y_train.append(y)
-
-    clf = FastXML(n_trees=1, re_split=True)
-    clf.fit(X_train, y_train)
-    sys.exit(0)
-
-    for X, y in quantize(test, quantizer):
-        y_hat = clf.predict(X)
-        y_top = list(islice(y_hat, len(y)))
-        print sorted(y)
-        print sorted(y_top)
-        print list(set(y) & set(y_top))
-        print [(yi, y_hat.get(yi,0)) for yi in sorted(y)]
-        print
-
-if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
