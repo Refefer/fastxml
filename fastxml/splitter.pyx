@@ -1,7 +1,16 @@
 from collections import Counter
+import numpy as np
+
+cimport numpy as np
 
 cdef int MAX_LABELS = 15000000
-cdef list LOGS = [1.0 / i for i in xrange(2, MAX_LABELS + 2)]
+cdef np.float32_t[:] LOGS
+
+def init_logs():
+    global LOGS
+    LOGS = 1 / np.arange(2, MAX_LABELS + 2, dtype=np.float32)
+
+init_logs()
 
 cdef float dcg(dict order, list ls):
     """
@@ -10,8 +19,9 @@ cdef float dcg(dict order, list ls):
     """
     cdef float s = 0
     for l in ls:
-        if l in order:
-            s += LOGS[order[l]]
+        idx = order.get(l)
+        if idx is not None:
+            s += LOGS[idx]
 
     return s
 
@@ -51,7 +61,11 @@ def split_node(list y, list idxs, rs, even_split):
         for i in idxs:
             (left if rs.rand() < 0.5 else right).append(i)
 
+    cdef int iters = 0
     while True:
+        iters += 1
+        if iters > 50:
+            break
 
         # Build ndcg for the sides
         lOrder = order_labels(y, left)

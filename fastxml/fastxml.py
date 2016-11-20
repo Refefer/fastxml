@@ -94,7 +94,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, even_split=False, n_jobs=1, classifier='sgd',
-            min_binary=1, seed=2016):
+            min_binary=1, verbose=False, seed=2016):
         assert classifier in ('sgd', 'liblinear')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -103,8 +103,12 @@ class FastXML(object):
         self.even_split = even_split
         self.n_jobs = n_jobs
         self.classifier = classifier
+        if isinstance(seed, np.random.RandomState):
+            seed = np.randint(0, np.iinfo(np.int32).max)
+
         self.seed = seed
         self.min_binary = min_binary
+        self.verbose = verbose
 
     @staticmethod
     def count_labels(y, idxs):
@@ -112,6 +116,9 @@ class FastXML(object):
         return Counter(it)
 
     def split_node(self, X, y, idxs, rs):
+        if self.verbose and len(idxs) > 1000:
+            print "Splitting {}".format(len(idxs))
+
         return split_node(y, idxs, rs, self.even_split)
 
     def compute_probs(self, y, idxs):
@@ -120,7 +127,7 @@ class FastXML(object):
         it = ((k, v / total) for k, v in counter.iteritems())
         return OrderedDict(islice(it, self.max_labels_per_leaf))
 
-    def train_clf(self, X, idxss):
+    def train_clf(self, X, idxss, rs):
         X_train = []
         y_train = []
 
@@ -131,7 +138,7 @@ class FastXML(object):
             y_train.extend([i] * len(idxs))
 
         if self.classifier == 'sgd':
-            clf = SGDClassifier(loss='log', penalty='l1', n_iter=2)
+            clf = SGDClassifier(loss='log', penalty='l1', n_iter=2, random_state=rs)
         else:
             clf = LinearSVC(penalty='l1', dual=False)
 
@@ -170,8 +177,11 @@ class FastXML(object):
                 else:
                     finished.append(left if left else right)
 
+        if len(finished) == 1:
+            return Leaf(self.compute_probs(y, idxs))
+
         # Build leafs for all the nodes
-        clf = self.train_clf(X, finished)
+        clf = self.train_clf(X, finished, rs)
         if self.re_split:
             finished = self.resplit(X, idxs, clf, len(finished))
 
@@ -191,10 +201,10 @@ class FastXML(object):
             return Leaf(self.compute_probs(y, idxs))
 
         # Train the classifier
-        if len(idxs) > 1000:
+        if self.verbose and len(idxs) > 1000:
             print "Training classifier"
 
-        clf = self.train_clf(X, [l_idx, r_idx])
+        clf = self.train_clf(X, [l_idx, r_idx], rs)
 
         # Resplit the data
         if self.re_split:
@@ -232,6 +242,8 @@ class FastXML(object):
             f = fork_call(self.grow_tree)
         else:
             f = faux_fork_call(self.grow_tree)
+
+        f = fork_call(self.grow_tree)
 
         procs = []
         finished = []
