@@ -7,7 +7,6 @@ import numpy as np
 
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
-from sklearn.svm import LinearSVC
 
 from .splitter import split_node
 
@@ -268,4 +267,32 @@ class FastXML(object):
 
         self.roots = finished
 
+class MetricNode(object):
+    __slots__ = ('left', 'right')
+    is_leaf = False
+    
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
 
+class MetricLeaf(object):
+    __slots__ = ('idxs')
+    is_leaf = True
+
+    def __init__(self, idxs):
+        self.idxs = idxs
+
+
+def metric_cluster(y, max_leaf_size=10, even_split=True, seed=2016):
+    rs = np.random.RandomState(seed=seed)
+    def _metric_cluster(idxs):
+        if len(idxs) < max_leaf_size:
+            return MetricLeaf(idxs)
+
+        left, right = split_node(y, idxs, rs, even_split)
+        if not left or not right:
+            return MetricLeaf(idxs)
+
+        return MetricNode(_metric_cluster(left), _metric_cluster(right))
+
+    return _metric_cluster(range(len(y)))
