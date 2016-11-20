@@ -93,22 +93,23 @@ def fork_call(f):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=False, even_split=False, n_jobs=1, classifier='sgd',
+            re_split=False, even_split=False, n_jobs=1, alpha=1e-5,
             min_binary=1, verbose=False, seed=2016):
-        assert classifier in ('sgd', 'liblinear')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
         self.max_labels_per_leaf = max_labels_per_leaf
         self.re_split = re_split
         self.even_split = even_split
-        self.n_jobs = n_jobs
-        self.classifier = classifier
+        self.n_jobs = n_jobs if n_jobs > 0 else (multiprocessing.cpu_count() + 1 + n_jobs)
+        self.alpha = alpha
+
         if isinstance(seed, np.random.RandomState):
             seed = np.randint(0, np.iinfo(np.int32).max)
 
         self.seed = seed
         self.min_binary = min_binary
         self.verbose = verbose
+        self.roots = []
 
     @staticmethod
     def count_labels(y, idxs):
@@ -137,10 +138,8 @@ class FastXML(object):
 
             y_train.extend([i] * len(idxs))
 
-        if self.classifier == 'sgd':
-            clf = SGDClassifier(loss='log', penalty='l1', n_iter=2, random_state=rs)
-        else:
-            clf = LinearSVC(penalty='l1', dual=False)
+        clf = SGDClassifier(loss='log', penalty='l1', n_iter=2, 
+                alpha=self.alpha, random_state=rs)
 
         clf.fit(stack(X_train), y_train)
         clf.sparsify()

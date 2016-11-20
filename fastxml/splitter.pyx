@@ -48,8 +48,9 @@ cdef tuple divide(list y, list idxs, dict lOrder, dict rOrder):
 
     return newLeft, newRight
 
-def split_node(list y, list idxs, rs, even_split):
+def split_node(list y, list idxs, rs, even_split, int max_iters = 50):
     cdef list left, left1, left2, right, right1, right2
+    cdef int iters
 
     if even_split:
         ix = idxs[:]
@@ -61,10 +62,10 @@ def split_node(list y, list idxs, rs, even_split):
         for i in idxs:
             (left if rs.rand() < 0.5 else right).append(i)
 
-    cdef int iters = 0
+    iters = 0
     while True:
         iters += 1
-        if iters > 50:
+        if iters > max_iters:
             break
 
         # Build ndcg for the sides
