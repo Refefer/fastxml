@@ -3,15 +3,20 @@
 from setuptools import setup
 from distutils.core import setup
 
-from Cython.Build import cythonize
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+#from Cython.Build import cythonize
+
+extensions = [
+  Extension("fastxml.splitter", ["fastxml/splitter.pyx"], language='c++')
+]
 
 setup(name='fastxml',
       version="0.0.1",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
-      ext_modules = cythonize([
-            "fastxml/splitter.pyx"
-      ]),
+      cmdclass = {'build_ext': build_ext},
+      ext_modules=extensions,
       packages=['fastxml'],
       scripts=[
       ],

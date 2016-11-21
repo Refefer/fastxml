@@ -1,10 +1,15 @@
-from collections import Counter
+# cython: profile=True
+from collections import Counter, defaultdict
 import numpy as np
 
 cimport numpy as np
+from libcpp.vector cimport vector
+from libcpp.pair cimport pair
 
 cdef int MAX_LABELS = 15000000
-cdef np.float32_t[:] LOGS
+cdef np.float32_t [:] LOGS
+
+ctypedef pair[vector[int],vector[int]] LR_SET
 
 def init_logs():
     global LOGS
@@ -18,68 +23,89 @@ cdef float dcg(dict order, list ls):
     bucket the label set in
     """
     cdef float s = 0
+    cdef int idx
     for l in ls:
-        idx = order.get(l)
-        if idx is not None:
+        idx = order.get(l, -1)
+        if idx != -1:
             s += LOGS[idx]
 
     return s
 
-def count_labels(y, idxs):
-    it = (yi for i in idxs for yi in y[i])
-    return Counter(it)
+cdef object count_labels(list y, vector[int]& idxs):
+    cdef long size = idxs.size()
+    cdef int offset
+    d = defaultdict(int)
+    while size:
+        size -= 1
+        offset = idxs[size]
+        for yi in y[offset]:
+            d[yi] += 1
 
-def order_labels(y, idxs):
+
+    return d
+
+cdef dict order_labels(list y, vector[int]& idxs):
     counter = count_labels(y, idxs)
     sLabels = sorted(counter.keys(), key=lambda x: counter[x], reverse=True)
-    return {l: i for i, l in enumerate(sLabels)}
+    return {l: i for i, l in enumerate(counter.iterkeys())}
 
-cdef tuple divide(list y, list idxs, dict lOrder, dict rOrder):
-    cdef list newLeft, newRight
+cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
+    cdef vector[int] newLeft, newRight
+    cdef int i, idx
     cdef float lNdcg, rNdcg
-    newLeft, newRight = [], []
-    for i in idxs:
-        lNdcg = dcg(lOrder, y[i])
-        rNdcg = dcg(rOrder, y[i])
+    cdef LR_SET empty
+
+    for i in range(idxs.size()):
+        idx = idxs[i]
+        lNdcg = dcg(lOrder, y[idx])
+        rNdcg = dcg(rOrder, y[idx])
         if lNdcg >= rNdcg:
-            newLeft.append(i)
+            newLeft.push_back(idx)
         else:
-            newRight.append(i)
+            newRight.push_back(idx)
 
-    return newLeft, newRight
+    empty.first = newLeft
+    empty.second = newRight
+    return empty
 
-def split_node(list y, list idxs, rs, even_split, int max_iters = 50):
-    cdef list left, left1, left2, right, right1, right2
+cdef copy_into(vector[int]& dest, vector[int]& src1):
+    for i in range(src1.size()):
+        dest.push_back(src1[i])
+
+cdef replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
+    dest.swap(src1)
+    copy_into(dest, src2)
+
+def split_node(list y, list idxs, rs, int max_iters = 50):
+    cdef vector[int] left, right
+    cdef LR_SET newLeft, newRight
     cdef int iters
 
-    if even_split:
-        ix = idxs[:]
-        rs.shuffle(ix)
-        left = ix[:len(ix)/2]
-        right = ix[len(ix)/2:]
-    else:
-        left, right = [], []
-        for i in idxs:
-            (left if rs.rand() < 0.5 else right).append(i)
+    for i in idxs:
+        if rs.rand() < 0.5:
+            left.push_back(i)
+        else:
+            right.push_back(i)
 
     iters = 0
     while True:
-        iters += 1
         if iters > max_iters:
             break
+
+        iters += 1
 
         # Build ndcg for the sides
         lOrder = order_labels(y, left)
         rOrder = order_labels(y, right)
 
         # Divide out the sides
-        left1, right1 = divide(y, left, lOrder, rOrder)
-        left2, right2 = divide(y, right, lOrder, rOrder)
-        if not right1 and not left2:
+        newLeft = divide(y, left, lOrder, rOrder)
+        newRight = divide(y, right, lOrder, rOrder)
+        if newLeft.second.empty() and newRight.first.empty():
             # Done!
             break
 
-        left = left1 + left2
-        right = right1 + right2
+        replace_vecs(left, newLeft.first, newRight.first)
+        replace_vecs(right, newLeft.second, newRight.second)
 
     return left, right

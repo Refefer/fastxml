@@ -92,13 +92,12 @@ def fork_call(f):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=False, even_split=False, n_jobs=1, alpha=1e-5,
+            re_split=False, n_jobs=1, alpha=1e-4,
             min_binary=1, verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
         self.max_labels_per_leaf = max_labels_per_leaf
         self.re_split = re_split
-        self.even_split = even_split
         self.n_jobs = n_jobs if n_jobs > 0 else (multiprocessing.cpu_count() + 1 + n_jobs)
         self.alpha = alpha
 
@@ -119,7 +118,7 @@ class FastXML(object):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
-        return split_node(y, idxs, rs, self.even_split)
+        return split_node(y, idxs, rs)
 
     def compute_probs(self, y, idxs):
         counter = self.count_labels(y, idxs)
@@ -283,13 +282,13 @@ class MetricLeaf(object):
         self.idxs = idxs
 
 
-def metric_cluster(y, max_leaf_size=10, even_split=True, seed=2016):
+def metric_cluster(y, max_leaf_size=10, seed=2016):
     rs = np.random.RandomState(seed=seed)
     def _metric_cluster(idxs):
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 
-        left, right = split_node(y, idxs, rs, even_split)
+        left, right = split_node(y, idxs, rs, 50)
         if not left or not right:
             return MetricLeaf(idxs)
 
