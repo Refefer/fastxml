@@ -1,4 +1,4 @@
-from collections import Counter, defaultdict
+from collections import defaultdict
 import numpy as np
 
 cimport numpy as np
@@ -39,7 +39,6 @@ cdef object count_labels(list y, vector[int]& idxs):
         offset = idxs[size]
         for yi in y[offset]:
             d[yi] += 1
-
 
     return d
 
