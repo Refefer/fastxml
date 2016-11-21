@@ -1,4 +1,3 @@
-# cython: profile=True
 from collections import Counter, defaultdict
 import numpy as np
 
@@ -46,8 +45,8 @@ cdef object count_labels(list y, vector[int]& idxs):
 
 cdef dict order_labels(list y, vector[int]& idxs):
     counter = count_labels(y, idxs)
-    sLabels = sorted(counter.keys(), key=lambda x: counter[x], reverse=True)
-    return {l: i for i, l in enumerate(counter.iterkeys())}
+    sLabels = sorted(counter.keys(), key=counter.__getitem__, reverse=True)
+    return {l: i for i, l in enumerate(sLabels)}
 
 cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
     cdef vector[int] newLeft, newRight
