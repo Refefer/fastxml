@@ -8,7 +8,7 @@ from Cython.Distutils import build_ext
 #from Cython.Build import cythonize
 
 extensions = [
-  Extension("fastxml.splitter", ["fastxml/splitter.pyx"], language='c++')
+  Extension("fastxml.splitter", ["fastxml/splitter.pyx"], language='c++', extra_compile_args=['-O3'])
 ]
 
 setup(name='fastxml',

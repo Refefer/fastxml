@@ -97,7 +97,8 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
-            downsample=None, bias=True, verbose=False, seed=2016):
+            downsample=None, bias=True, propensity=True, A=0.55, B=1.5, 
+            verbose=False, seed=2016):
         assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -115,6 +116,9 @@ class FastXML(object):
         self.verbose = verbose
         self.downsample = downsample
         self.bias = bias
+        self.propensity = propensity
+        self.A = A
+        self.B = B
         self.roots = []
 
     @staticmethod
@@ -122,11 +126,11 @@ class FastXML(object):
         it = (yi for i in idxs for yi in y[i])
         return Counter(it)
 
-    def split_node(self, X, y, idxs, rs):
+    def split_node(self, X, y, weights, idxs, rs):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
-        return split_node(y, idxs, rs)
+        return split_node(y, weights, idxs, rs)
 
     def compute_probs(self, y, idxs):
         counter = self.count_labels(y, idxs)
@@ -183,7 +187,7 @@ class FastXML(object):
             if len(idx) <= self.max_leaf_size:
                 finished.append(idx)
             else:
-                left, right = self.split_node(X, y, idx, rs)
+                left, right = self.split_node(X, y, weights, idx, rs)
                 if left and right:
                     idx_set.extendleft([left, right])
                 else:
@@ -200,14 +204,14 @@ class FastXML(object):
         leafs = [Leaf(self.compute_probs(y, idx)) for idx in finished]
         return MNode(leafs, clf)
 
-    def grow_tree(self, X, y, idxs, rs):
+    def grow_tree(self, X, y, weights, idxs, rs):
         if len(idxs) <= self.max_leaf_size:
             return Leaf(self.compute_probs(y, idxs))
 
         if len(idxs) < self.min_binary:
             return self.grow_mtree(X, y, idxs, rs)
         
-        l_idx, r_idx = self.split_node(X, y, idxs, rs)
+        l_idx, r_idx = self.split_node(X, y, weights, idxs, rs)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs))
@@ -230,8 +234,8 @@ class FastXML(object):
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs))
 
-        lNode = self.grow_tree(X, y, l_idx, rs)
-        rNode = self.grow_tree(X, y, r_idx, rs)
+        lNode = self.grow_tree(X, y, weights, l_idx, rs)
+        rNode = self.grow_tree(X, y, weights, r_idx, rs)
 
         return Node(lNode, rNode, clf)
 
@@ -253,11 +257,33 @@ class FastXML(object):
         xs = sorted(res.iteritems(), key=lambda x: x[1], reverse=True)
         return OrderedDict((k, v / len(self.roots)) for k, v in xs)
 
+    def weights(self, y):
+        if self.propensity:
+            return self.compute_propensity(y, self.A, self.B)
+
+        return np.ones(max(yi for ys in y for yi in ys), dtype='float32')
+
+    @staticmethod
+    def compute_propensity(y, A, B):
+        """
+        Computes propensity scores based on ys
+        """
+        Nl = Counter(yi for ys in y for yi in ys)
+        N = len(y)
+        C = (np.log(N) - 1) * (B + 1) ** A
+        weights = []
+        for i in xrange(max(Nl)):
+            weights.append(1. / (1 + C * np.exp(-A * np.log(Nl.get(i, 0) + B))))
+
+        return np.array(weights, dtype='float32')
+
     def fit(self, X, y):
         if self.n_jobs > 1:
             f = fork_call(self.grow_tree)
         else:
             f = faux_fork_call(self.grow_tree)
+
+        weights = self.compute_weights(y)
 
         procs = []
         finished = []
@@ -265,7 +291,7 @@ class FastXML(object):
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
                 rs = np.random.RandomState(seed=self.seed + next(counter))
-                procs.append(f(X, y, range(len(X)), rs))
+                procs.append(f(X, y, weights, range(len(X)), rs))
             else:
                 # Check
                 _procs = []
@@ -298,14 +324,14 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-
 def metric_cluster(y, max_leaf_size=10, seed=2016):
     rs = np.random.RandomState(seed=seed)
+    weights = np.ones(max(yi for ys in y for yi in ys), dtype='float32')
     def _metric_cluster(idxs):
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 
-        left, right = split_node(y, idxs, rs, 50)
+        left, right = split_node(y, weights, idxs, rs, 50)
         if not left or not right:
             return MetricLeaf(idxs)
 

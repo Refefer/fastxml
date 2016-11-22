@@ -1,3 +1,5 @@
+#cython: boundscheck=False, wraparound=False, cdivision=True
+
 from collections import defaultdict
 import numpy as np
 
@@ -21,12 +23,10 @@ cdef float dcg(dict order, list ls):
     We only need to use DCG since we're only using it to determine which partition
     bucket the label set in
     """
-    cdef float s = 0
-    cdef int idx
+    cdef float log, s = 0
     for l in ls:
-        idx = order.get(l, -1)
-        if idx != -1:
-            s += LOGS[idx]
+        log = order.get(l, 0.0)
+        s += log
 
     return s
 
@@ -42,10 +42,18 @@ cdef object count_labels(list y, vector[int]& idxs):
 
     return d
 
-cdef dict order_labels(list y, vector[int]& idxs):
+cdef dict order_labels(list y, float [:] weights, vector[int]& idxs):
+    cdef int i, l
+    cdef float w
     counter = count_labels(y, idxs)
     sLabels = sorted(counter.keys(), key=counter.__getitem__, reverse=True)
-    return {l: i for i, l in enumerate(sLabels)}
+    cdef dict d = {}
+    for i in range(len(sLabels)):
+        l = sLabels[i]
+        w = weights[l]
+        d[l] = LOGS[i] * w
+
+    return d
 
 cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
     cdef vector[int] newLeft, newRight
@@ -55,8 +63,9 @@ cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
 
     for i in range(idxs.size()):
         idx = idxs[i]
-        lNdcg = dcg(lOrder, y[idx])
-        rNdcg = dcg(rOrder, y[idx])
+        ys = y[idx]
+        lNdcg = dcg(lOrder, ys)
+        rNdcg = dcg(rOrder, ys)
         if lNdcg >= rNdcg:
             newLeft.push_back(idx)
         else:
@@ -74,7 +83,7 @@ cdef replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
     dest.swap(src1)
     copy_into(dest, src2)
 
-def split_node(list y, list idxs, rs, int max_iters = 50):
+def split_node(list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_iters = 50):
     cdef vector[int] left, right
     cdef LR_SET newLeft, newRight
     cdef int iters
@@ -93,8 +102,8 @@ def split_node(list y, list idxs, rs, int max_iters = 50):
         iters += 1
 
         # Build ndcg for the sides
-        lOrder = order_labels(y, left)
-        rOrder = order_labels(y, right)
+        lOrder = order_labels(y, weights, left)
+        rOrder = order_labels(y, weights, right)
 
         # Divide out the sides
         newLeft = divide(y, left, lOrder, rOrder)
