@@ -22,7 +22,7 @@ TODO
 
 Quite a bit todo!  A base implementation using NDCG is fully working with Cython bindings to make the alternating minization reasonably fast - but a lot more could be done here:
 
-1. Abstract out Rank Metric.  This is needed to get Propensity-based ranking metrics integrated in a consistent manner.  See https://manikvarma.github.io/pubs/jain16.pdf for motivation.
+1. ---Abstract out Rank Metric.  This is needed to get Propensity-based ranking metrics integrated in a consistent manner.  See https://manikvarma.github.io/pubs/jain16.pdf for motivation.---
 2. Leaf re-ranking based on the above paper.  That should dramatically improve performance of rare labels.
 3. Abstract out classifier from learning algorithm.
 4. General speedups:
