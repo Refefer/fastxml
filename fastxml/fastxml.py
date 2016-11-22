@@ -97,7 +97,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
-            downsample=None, bias=True, propensity=True, A=0.55, B=1.5, 
+            downsample=None, bias=True, propensity=False, A=0.55, B=1.5, 
             verbose=False, seed=2016):
         assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
@@ -257,9 +257,9 @@ class FastXML(object):
         xs = sorted(res.iteritems(), key=lambda x: x[1], reverse=True)
         return OrderedDict((k, v / len(self.roots)) for k, v in xs)
 
-    def weights(self, y):
+    def compute_weights(self, y):
         if self.propensity:
-            return self.compute_propensity(y, self.A, self.B)
+            return 1 / self.compute_propensity(y, self.A, self.B)
 
         return np.ones(max(yi for ys in y for yi in ys), dtype='float32')
 
@@ -324,9 +324,13 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-def metric_cluster(y, max_leaf_size=10, seed=2016):
+def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=2016):
     rs = np.random.RandomState(seed=seed)
-    weights = np.ones(max(yi for ys in y for yi in ys), dtype='float32')
+    if propensity:
+        weights = 1 / FastXML.compute_propensity(y, 0.55, 1.5)
+    else:
+        weights = np.ones(max(yi for ys in y for yi in ys), dtype='float32')
+
     def _metric_cluster(idxs):
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)

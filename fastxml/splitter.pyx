@@ -44,7 +44,6 @@ cdef object count_labels(list y, vector[int]& idxs):
 
 cdef dict order_labels(list y, float [:] weights, vector[int]& idxs):
     cdef int i, l
-    cdef float w
     counter = count_labels(y, idxs)
     sLabels = sorted(counter.keys(), key=counter.__getitem__, reverse=True)
     cdef dict d = {}
