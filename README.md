@@ -9,7 +9,7 @@ Usage
     from fastxml import FastXML
 
     X = [Sparse or numpy arrays]
-    y = [["red", "pants"]]
+    y = [[1, 3]]
 
     clf = FastXML(n_trees=32, n_jobs=-1)
 
