@@ -11,24 +11,28 @@ from sklearn.linear_model import SGDClassifier
 from .splitter import split_node
 
 class Node(object):
+    __slots__ = ('left', 'right', 'clf')
     def __init__(self, left, right, clf):
         self.left = left
         self.right = right
         self.clf = clf
 
     def traverse(self, X):
-        if self.clf.predict(X) == 0:
+        c = self.clf.predict(X)[0]
+        if c == 0:
             return self.left
 
         return self.right
 
 class MNode(Node):
+    __slots__ = ('nodes', 'clf')
     def __init__(self, nodes, clf):
         self.nodes = nodes
         self.clf = clf
 
     def traverse(self, X):
-        return self.nodes[self.clf.predict(X)[0]]
+        c = self.clf.predict(X)[0]
+        return self.nodes[c]
 
 class Leaf(object):
     def __init__(self, probs):
@@ -92,8 +96,9 @@ def fork_call(f):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=False, n_jobs=1, alpha=1e-4,
-            min_binary=1, verbose=False, seed=2016):
+            re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
+            downsample=None, bias=True, verbose=False, seed=2016):
+        assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
         self.max_labels_per_leaf = max_labels_per_leaf
@@ -106,7 +111,10 @@ class FastXML(object):
 
         self.seed = seed
         self.min_binary = min_binary
+        self.n_epochs = n_epochs
         self.verbose = verbose
+        self.downsample = downsample
+        self.bias = bias
         self.roots = []
 
     @staticmethod
@@ -136,11 +144,18 @@ class FastXML(object):
 
             y_train.extend([i] * len(idxs))
 
-        clf = SGDClassifier(loss='log', penalty='l1', n_iter=2, 
-                alpha=self.alpha, random_state=rs)
+        clf = SGDClassifier(loss='log', penalty='l1', n_iter=self.n_epochs, 
+                alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
+                random_state=rs)
 
         clf.fit(stack(X_train), y_train)
         clf.sparsify()
+        # Halves the memory requirement
+        if self.downsample is not None:
+            clf.coef_ = clf.coef_.astype(self.downsample)
+            if self.bias:
+                clf.intercept_ = clf.intercept_.astype(self.downsample)
+
         return clf
 
     @staticmethod
@@ -205,7 +220,12 @@ class FastXML(object):
 
         # Resplit the data
         if self.re_split:
+            if self.verbose and len(idxs) > 1000:
+                print "Pre-split:", len(l_idx), len(r_idx)
+
             l_idx, r_idx = self.resplit(X, idxs, clf, 2)
+            if self.verbose and len(idxs) > 1000:
+                print "Post-split:", len(l_idx), len(r_idx)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs))
@@ -216,7 +236,7 @@ class FastXML(object):
         return Node(lNode, rNode, clf)
 
     def predict(self, X):
-        probs = []
+        probs = [{}]
         for tree in self.roots:
             while not isinstance(tree, Leaf):
                 tree = tree.traverse(X)
@@ -224,13 +244,12 @@ class FastXML(object):
             probs.append(tree.probs)
     
         def merge(d1, d2):
-            d = d1.copy()
             for k, v in d2.iteritems():
-                d[k] = d.get(k,0) + v
+                d1[k] = d1.get(k,0) + v
 
-            return d
+            return d1
         
-        res = reduce(merge, probs, {})
+        res = reduce(merge, probs)
         xs = sorted(res.iteritems(), key=lambda x: x[1], reverse=True)
         return OrderedDict((k, v / len(self.roots)) for k, v in xs)
 
@@ -239,8 +258,6 @@ class FastXML(object):
             f = fork_call(self.grow_tree)
         else:
             f = faux_fork_call(self.grow_tree)
-
-        f = fork_call(self.grow_tree)
 
         procs = []
         finished = []
