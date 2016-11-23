@@ -98,7 +98,7 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
             downsample=None, bias=True, propensity=False, A=0.55, B=1.5, 
-            verbose=False, seed=2016):
+            data_split=1, verbose=False, seed=2016):
         assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -119,6 +119,7 @@ class FastXML(object):
         self.propensity = propensity
         self.A = A
         self.B = B
+        self.data_split = data_split
         self.roots = []
 
     @staticmethod
@@ -134,7 +135,7 @@ class FastXML(object):
 
     def compute_probs(self, y, idxs):
         counter = self.count_labels(y, idxs)
-        total = float(sum(counter.itervalues()))
+        total = float(len(idxs))
         it = ((k, v / total) for k, v in counter.iteritems())
         return OrderedDict(islice(it, self.max_labels_per_leaf))
 
@@ -277,6 +278,29 @@ class FastXML(object):
 
         return np.array(weights, dtype='float32')
 
+    def generate_idxs(self, dataset_len):
+        if self.data_split == 1:
+            return repeat(range(idxs))
+
+        batch_size = int(dataset_len * self.data_split) \
+                if self.data_split < 1 else self.data_split
+
+        if batch_size > dataset_len:
+            raise Exception("dataset subset is larger than dataset")
+
+        def gen(bs):
+            rs = np.random.RandomState(seed=self.seed + 1000)
+            idxs = range(dataset_len)
+            while True:
+                rs.shuffle(idxs)
+                it = iter(idxs)
+                data = list(islice(it, bs))
+                while data:
+                    yield data
+                    data = list(islice(it, bs))
+
+        return gen(batch_size)
+
     def fit(self, X, y):
         if self.n_jobs > 1:
             f = fork_call(self.grow_tree)
@@ -288,10 +312,11 @@ class FastXML(object):
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
+        idxs = self.generate_idxs(len(X))
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
                 rs = np.random.RandomState(seed=self.seed + next(counter))
-                procs.append(f(X, y, weights, range(len(X)), rs))
+                procs.append(f(X, y, weights, next(idxs), rs))
             else:
                 # Check
                 _procs = []
