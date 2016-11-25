@@ -98,7 +98,8 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
             downsample=None, bias=True, propensity=False, A=0.55, B=1.5, 
-            data_split=1, verbose=False, seed=2016):
+            data_split=1, loss='log', retry_re_split=5, sparsify=True,
+            verbose=False, seed=2016):
         assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -120,6 +121,9 @@ class FastXML(object):
         self.A = A
         self.B = B
         self.data_split = data_split
+        self.loss = loss
+        self.retry_re_split = retry_re_split
+        self.sparsify = sparsify
         self.roots = []
 
     @staticmethod
@@ -139,7 +143,7 @@ class FastXML(object):
         it = ((k, v / total) for k, v in counter.iteritems())
         return OrderedDict(islice(it, self.max_labels_per_leaf))
 
-    def train_clf(self, X, idxss, rs):
+    def train_clf(self, X, idxss, rs, tries=0):
         X_train = []
         y_train = []
 
@@ -149,12 +153,14 @@ class FastXML(object):
 
             y_train.extend([i] * len(idxs))
 
-        clf = SGDClassifier(loss='log', penalty='l1', n_iter=self.n_epochs, 
+        clf = SGDClassifier(loss=self.loss, penalty='l1', n_iter=self.n_epochs + tries, 
                 alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                 random_state=rs)
 
         clf.fit(stack(X_train), y_train)
-        clf.sparsify()
+        if self.sparsify:
+            clf.sparsify()
+
         # Halves the memory requirement
         if self.downsample is not None:
             clf.coef_ = clf.coef_.astype(self.downsample)
@@ -164,7 +170,7 @@ class FastXML(object):
         return clf
 
     @staticmethod
-    def resplit(X, idxs, clf, classes):
+    def resplit_data(X, idxs, clf, classes):
         X_train = [X[i] for i in idxs]
         new_idxs = [[] for _ in xrange(classes)]
         for i, k in enumerate(clf.predict(stack(X_train))):
@@ -205,6 +211,19 @@ class FastXML(object):
         leafs = [Leaf(self.compute_probs(y, idx)) for idx in finished]
         return MNode(leafs, clf)
 
+    def split_train(self, X, y, weights, idxs, rs, tries=0):
+        l_idx, r_idx = self.split_node(X, y, weights, idxs, rs)
+
+        clf = None
+        if l_idx and r_idx:
+            # Train the classifier
+            if self.verbose and len(idxs) > 1000:
+                print "Training classifier"
+
+            clf = self.train_clf(X, [l_idx, r_idx], rs, tries)
+
+        return l_idx, r_idx, clf
+
     def grow_tree(self, X, y, weights, idxs, rs):
         if len(idxs) <= self.max_leaf_size:
             return Leaf(self.compute_probs(y, idxs))
@@ -212,25 +231,30 @@ class FastXML(object):
         if len(idxs) < self.min_binary:
             return self.grow_mtree(X, y, idxs, rs)
         
-        l_idx, r_idx = self.split_node(X, y, weights, idxs, rs)
+        l_idx, r_idx, clf = self.split_train(X, y, weights, idxs, rs)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs))
 
-        # Train the classifier
-        if self.verbose and len(idxs) > 1000:
-            print "Training classifier"
-
-        clf = self.train_clf(X, [l_idx, r_idx], rs)
-
         # Resplit the data
-        if self.re_split:
-            if self.verbose and len(idxs) > 1000:
-                print "Pre-split:", len(l_idx), len(r_idx)
+        for tries in xrange(self.retry_re_split if self.re_split else 0):
 
-            l_idx, r_idx = self.resplit(X, idxs, clf, 2)
-            if self.verbose and len(idxs) > 1000:
-                print "Post-split:", len(l_idx), len(r_idx)
+            if self.verbose and len(idxs) >= 1000:
+                print "Resplit-before: {}".format((len(l_idx), len(r_idx)))
+
+            if clf is not None:
+                l_idx, r_idx = self.resplit_data(X, idxs, clf, 2)
+
+            if self.verbose and len(idxs) >= 1000:
+                print "Resplit-after: {}".format((len(l_idx), len(r_idx)))
+
+            if l_idx and r_idx: break
+
+            if self.verbose:
+                print "Re-splitting {}".format(len(idxs))
+
+            l_idx, r_idx, clf = self.split_train(
+                    X, y, weights, idxs, rs, tries)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs))
@@ -280,7 +304,7 @@ class FastXML(object):
 
     def generate_idxs(self, dataset_len):
         if self.data_split == 1:
-            return repeat(range(idxs))
+            return repeat(range(dataset_len))
 
         batch_size = int(dataset_len * self.data_split) \
                 if self.data_split < 1 else self.data_split

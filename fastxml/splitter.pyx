@@ -18,7 +18,7 @@ def init_logs():
 
 init_logs()
 
-cdef float dcg(dict order, list ls):
+cdef inline float dcg(dict order, list ls):
     """
     We only need to use DCG since we're only using it to determine which partition
     bucket the label set in
