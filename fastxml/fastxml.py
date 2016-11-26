@@ -113,7 +113,6 @@ class FastXML(object):
             seed = np.randint(0, np.iinfo(np.int32).max)
 
         self.seed = seed
-        self.min_binary = min_binary
         self.n_epochs = n_epochs
         self.verbose = verbose
         self.downsample = downsample
