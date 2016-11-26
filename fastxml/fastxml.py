@@ -24,19 +24,20 @@ class Node(object):
 
         return self.right
 
-class MNode(Node):
-    __slots__ = ('nodes', 'clf')
-    def __init__(self, nodes, clf):
-        self.nodes = nodes
-        self.clf = clf
-
-    def traverse(self, X):
-        c = self.clf.predict(X)[0]
-        return self.nodes[c]
-
 class Leaf(object):
     def __init__(self, probs):
         self.probs = probs
+
+class CLF(object):
+    __slots__ = ('w', 'inter')
+
+    def __init__(self, w, inter):
+        self.w = w
+        self.inter = inter
+
+    def predict(self, X):
+        k = self.w.dot(X) + self.inter
+        return [0 if k < 0 else 1]
 
 def stack(X):
     stacker = np.vstack if isinstance(X[0], np.ndarray) else sp.vstack
@@ -96,7 +97,7 @@ def fork_call(f):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=False, n_jobs=1, alpha=1e-4, min_binary=1, n_epochs=2,
+            re_split=False, n_jobs=1, alpha=1e-4, n_epochs=2,
             downsample=None, bias=True, propensity=False, A=0.55, B=1.5, 
             data_split=1, loss='log', retry_re_split=5, sparsify=True,
             verbose=False, seed=2016):
@@ -126,22 +127,22 @@ class FastXML(object):
         self.sparsify = sparsify
         self.roots = []
 
-    @staticmethod
-    def count_labels(y, idxs):
-        it = (yi for i in idxs for yi in y[i])
-        return Counter(it)
-
     def split_node(self, X, y, weights, idxs, rs):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
         return split_node(y, weights, idxs, rs)
 
-    def compute_probs(self, y, idxs):
-        counter = self.count_labels(y, idxs)
+    def compute_probs(self, y, idxs, ml):
+        counter = Counter(yi for i in idxs for yi in y[i])
         total = float(len(idxs))
-        it = ((k, v / total) for k, v in counter.iteritems())
-        return OrderedDict(islice(it, self.max_labels_per_leaf))
+        i, j, v = [], [], []
+        for l, val in counter.most_common(self.max_labels_per_leaf):
+            i.append(0)
+            j.append(l)
+            v.append(val / total)
+
+        return sp.csr_matrix((v, (i, j)), shape=(1, ml)).astype('float32')
 
     def train_clf(self, X, idxss, rs, tries=0):
         X_train = []
@@ -167,7 +168,7 @@ class FastXML(object):
             if self.bias:
                 clf.intercept_ = clf.intercept_.astype(self.downsample)
 
-        return clf
+        return clf, CLF(clf.coef_, clf.intercept_)
 
     @staticmethod
     def resplit_data(X, idxs, clf, classes):
@@ -178,63 +179,27 @@ class FastXML(object):
 
         return new_idxs
 
-    def grow_mtree(self, X, y, idxs, rs):
-        """
-        We create an K-label discrete classifier if the idxs are less than the
-        minimum binary level.  We continue by binary splitting all the indexes
-        but train a single classifier instead of a tree of small classifiers.
-
-        TODO: allow for a different classifier for multiclass to allow for
-        nonlineariies.
-        """
-        finished = []
-        idx_set = deque([idxs])
-        while idx_set:
-            idx = idx_set.popleft()
-            if len(idx) <= self.max_leaf_size:
-                finished.append(idx)
-            else:
-                left, right = self.split_node(X, y, weights, idx, rs)
-                if left and right:
-                    idx_set.extendleft([left, right])
-                else:
-                    finished.append(left if left else right)
-
-        if len(finished) == 1:
-            return Leaf(self.compute_probs(y, idxs))
-
-        # Build leafs for all the nodes
-        clf = self.train_clf(X, finished, rs)
-        if self.re_split:
-            finished = self.resplit(X, idxs, clf, len(finished))
-
-        leafs = [Leaf(self.compute_probs(y, idx)) for idx in finished]
-        return MNode(leafs, clf)
-
     def split_train(self, X, y, weights, idxs, rs, tries=0):
         l_idx, r_idx = self.split_node(X, y, weights, idxs, rs)
 
-        clf = None
+        clf = clf_fast = None
         if l_idx and r_idx:
             # Train the classifier
             if self.verbose and len(idxs) > 1000:
                 print "Training classifier"
 
-            clf = self.train_clf(X, [l_idx, r_idx], rs, tries)
+            clf, clf_fast = self.train_clf(X, [l_idx, r_idx], rs, tries)
 
-        return l_idx, r_idx, clf
+        return l_idx, r_idx, (clf, clf_fast)
 
-    def grow_tree(self, X, y, weights, idxs, rs):
+    def grow_tree(self, X, y, weights, idxs, rs, max_label):
         if len(idxs) <= self.max_leaf_size:
-            return Leaf(self.compute_probs(y, idxs))
+            return Leaf(self.compute_probs(y, idxs, max_label))
 
-        if len(idxs) < self.min_binary:
-            return self.grow_mtree(X, y, idxs, rs)
-        
-        l_idx, r_idx, clf = self.split_train(X, y, weights, idxs, rs)
+        l_idx, r_idx, (clf, clff) = self.split_train(X, y, weights, idxs, rs)
 
         if not l_idx or not r_idx:
-            return Leaf(self.compute_probs(y, idxs))
+            return Leaf(self.compute_probs(y, idxs, max_label))
 
         # Resplit the data
         for tries in xrange(self.retry_re_split if self.re_split else 0):
@@ -253,35 +218,45 @@ class FastXML(object):
             if self.verbose:
                 print "Re-splitting {}".format(len(idxs))
 
-            l_idx, r_idx, clf = self.split_train(
+            l_idx, r_idx, (clf, clff) = self.split_train(
                     X, y, weights, idxs, rs, tries)
 
         if not l_idx or not r_idx:
-            return Leaf(self.compute_probs(y, idxs))
+            return Leaf(self.compute_probs(y, idxs, max_label))
 
-        lNode = self.grow_tree(X, y, weights, l_idx, rs)
-        rNode = self.grow_tree(X, y, weights, r_idx, rs)
+        lNode = self.grow_tree(X, y, weights, l_idx, rs, max_label)
+        rNode = self.grow_tree(X, y, weights, r_idx, rs, max_label)
 
-        return Node(lNode, rNode, clf)
+        return Node(lNode, rNode, clff)
 
-    def predict(self, X):
-        probs = [{}]
-        for tree in self.roots:
-            while not isinstance(tree, Leaf):
-                tree = tree.traverse(X)
+    def predict(self, X, fmt='sparse'):
+        assert fmt in ('sparse', 'dict')
+        s = []
+        for i in xrange(X.shape[0]):
+            x = X[i].T
+            probs = []
+            for tree in self.roots:
+                while not isinstance(tree, Leaf):
+                    tree = tree.traverse(x)
 
-            probs.append(tree.probs)
-    
-        def merge(d1, d2):
-            for k, v in d2.iteritems():
-                d1[k] = d1.get(k,0) + v
-
-            return d1
+                probs.append(tree.probs)
         
-        res = reduce(merge, probs)
-        xs = sorted(res.iteritems(), key=lambda x: x[1], reverse=True)
-        return OrderedDict((k, v / len(self.roots)) for k, v in xs)
+            mean = sum(probs) / len(probs)
+            if fmt == 'sparse':
+                s.append(mean)
 
+            else:
+                od = OrderedDict()
+                for idx in reversed(mean.data.argsort()):
+                    od[mean.indices[idx]] = mean.data[idx]
+                
+                s.append(od)
+
+        if fmt == 'sparse':
+            return sp.vstack(s)
+
+        return s
+        
     def compute_weights(self, y):
         if self.propensity:
             return 1 / self.compute_propensity(y, self.A, self.B)
@@ -333,6 +308,7 @@ class FastXML(object):
 
         weights = self.compute_weights(y)
 
+        max_label = max(yi for ys in y for yi in ys) + 1
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
@@ -340,7 +316,7 @@ class FastXML(object):
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
                 rs = np.random.RandomState(seed=self.seed + next(counter))
-                procs.append(f(X, y, weights, next(idxs), rs))
+                procs.append(f(X, y, weights, next(idxs), rs, max_label))
             else:
                 # Check
                 _procs = []
