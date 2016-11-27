@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True, profile=True
+#cython: boundscheck=False, wraparound=False, cdivision=True
 
 from collections import defaultdict
 import numpy as np
@@ -26,7 +26,7 @@ init_logs()
 cdef class Splitter:
     cdef vector[int] left, right
     cdef LR_SET newLeft, newRight
-    cdef int labels
+    cdef int n_labels
     cdef COUNTER counter 
     cdef vector[float] lOrder, rOrder
 
@@ -42,6 +42,12 @@ cdef class Splitter:
         # logs
         self.lOrder = vector[float](n_labels, 0.0)
         self.rOrder = vector[float](n_labels, 0.0)
+
+        self.n_labels = n_labels
+
+    @property
+    def max_label(self):
+        return self.n_labels
 
     def split_node(self, list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_iters = 50):
         cdef vector[int] left, right
@@ -105,6 +111,8 @@ cdef void count_labels(list y, const vector[int]& idxs, COUNTER& counts):
         offset = idxs[i]
         for yi in y[offset]:
             counts[yi].second += 1
+
+    return
 
 @cython.profile(False)
 cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):

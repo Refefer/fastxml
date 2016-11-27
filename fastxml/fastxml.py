@@ -126,11 +126,11 @@ class FastXML(object):
         self.sparsify = sparsify
         self.roots = []
 
-    def split_node(self, X, y, weights, idxs, rs):
+    def split_node(self, X, y, weights, idxs, splitter, rs):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
-        return split_node(y, weights, idxs, rs)
+        return splitter.split_node(y, weights, idxs, rs)
 
     def compute_probs(self, y, idxs, ml):
         counter = Counter(yi for i in idxs for yi in y[i])
@@ -178,8 +178,8 @@ class FastXML(object):
 
         return new_idxs
 
-    def split_train(self, X, y, weights, idxs, rs, tries=0):
-        l_idx, r_idx = self.split_node(X, y, weights, idxs, rs)
+    def split_train(self, X, y, weights, idxs, splitter, rs, tries=0):
+        l_idx, r_idx = self.split_node(X, y, weights, idxs, splitter, rs)
 
         clf = clf_fast = None
         if l_idx and r_idx:
@@ -191,14 +191,14 @@ class FastXML(object):
 
         return l_idx, r_idx, (clf, clf_fast)
 
-    def grow_tree(self, X, y, weights, idxs, rs, max_label):
+    def grow_tree(self, X, y, weights, idxs, rs, splitter):
         if len(idxs) <= self.max_leaf_size:
-            return Leaf(self.compute_probs(y, idxs, max_label))
+            return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
-        l_idx, r_idx, (clf, clff) = self.split_train(X, y, weights, idxs, rs)
+        l_idx, r_idx, (clf, clff) = self.split_train(X, y, weights, idxs, splitter, rs)
 
         if not l_idx or not r_idx:
-            return Leaf(self.compute_probs(y, idxs, max_label))
+            return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
         # Resplit the data
         for tries in xrange(self.retry_re_split if self.re_split else 0):
@@ -218,13 +218,13 @@ class FastXML(object):
                 print "Re-splitting {}".format(len(idxs))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
-                    X, y, weights, idxs, rs, tries)
+                    X, y, weights, idxs, splitter, rs, tries)
 
         if not l_idx or not r_idx:
-            return Leaf(self.compute_probs(y, idxs, max_label))
+            return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
-        lNode = self.grow_tree(X, y, weights, l_idx, rs, max_label)
-        rNode = self.grow_tree(X, y, weights, r_idx, rs, max_label)
+        lNode = self.grow_tree(X, y, weights, l_idx, rs, splitter)
+        rNode = self.grow_tree(X, y, weights, r_idx, rs, splitter)
 
         return Node(lNode, rNode, clff)
 
@@ -308,6 +308,7 @@ class FastXML(object):
         weights = self.compute_weights(y)
 
         max_label = max(yi for ys in y for yi in ys) + 1
+        splitter = Splitter(max_label)
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
@@ -315,7 +316,7 @@ class FastXML(object):
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
                 rs = np.random.RandomState(seed=self.seed + next(counter))
-                procs.append(f(X, y, weights, next(idxs), rs, max_label))
+                procs.append(f(X, y, weights, next(idxs), rs, splitter))
             else:
                 # Check
                 _procs = []
