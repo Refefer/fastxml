@@ -26,15 +26,20 @@ init_logs()
 cdef class Splitter:
     cdef vector[int] left, right
     cdef LR_SET newLeft, newRight
-    cdef int n_labels
-    cdef COUNTER counter 
-    cdef vector[float] lOrder, rOrder
 
-    def __init__(self, int n_labels):
+    cdef int n_labels, max_iters
+
+    cdef COUNTER counter 
+    cdef vector[float] lOrder, rOrder, weights
+
+    def __init__(self, np.ndarray[np.float32_t] ws, const int max_iters=50):
 
         # Initialize counters
         cdef pair[int,int] p
         p.first = p.second = 0
+
+        cdef int n_labels = ws.shape[0]
+        self.n_labels = n_labels
 
         # Variable for NDCG sorting
         self.counter = vector[pair[int,int]](n_labels, p)
@@ -43,13 +48,23 @@ cdef class Splitter:
         self.lOrder = vector[float](n_labels, 0.0)
         self.rOrder = vector[float](n_labels, 0.0)
 
-        self.n_labels = n_labels
+        self.max_iters = max_iters
+
+        self._init_weights(ws, n_labels)
+
+    cdef void _init_weights(self, const float [:] ws, const int size):
+        cdef int i
+
+        self.weights.reserve(size)
+
+        for i in range(size):
+            self.weights.push_back(ws[i])
 
     @property
     def max_label(self):
         return self.n_labels
 
-    def split_node(self, list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_iters = 50):
+    def split_node(self, list y,  list idxs, rs):
         cdef vector[int] left, right
         cdef LR_SET newLeft, newRight
         cdef int iters
@@ -63,14 +78,14 @@ cdef class Splitter:
 
         iters = 0
         while True:
-            if iters > max_iters:
+            if iters > self.max_iters:
                 break
 
             iters += 1
 
             # Build ndcg for the sides
-            order_labels(y, weights, left, self.counter, self.lOrder)
-            order_labels(y, weights, right, self.counter, self.rOrder)
+            order_labels(y, self.weights, left, self.counter, self.lOrder)
+            order_labels(y, self.weights, right, self.counter, self.rOrder)
 
             # Divide out the sides
             newLeft = divide(y, left, self.lOrder, self.rOrder)
@@ -118,7 +133,7 @@ cdef void count_labels(list y, const vector[int]& idxs, COUNTER& counts):
 cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
     return l.second > r.second
 
-cdef void order_labels(list y, float [:] weights, vector[int]& idxs, COUNTER& counter, vector[float]& logs):
+cdef void order_labels(list y, vector[float]& weights, vector[int]& idxs, COUNTER& counter, vector[float]& logs):
     cdef vector[float] rankings
     cdef int i, label
     cdef float w

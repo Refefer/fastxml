@@ -307,8 +307,7 @@ class FastXML(object):
 
         weights = self.compute_weights(y)
 
-        max_label = max(yi for ys in y for yi in ys) + 1
-        splitter = Splitter(max_label)
+        splitter = Splitter(weights)
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
@@ -362,13 +361,13 @@ def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=20
         weights = np.ones(n_labels, dtype='float32')
 
     # Initialize splitter
-    splitter = Splitter(n_labels)
+    splitter = Splitter(weights)
 
     def _metric_cluster(idxs):
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 
-        left, right = splitter.split_node(y, weights, idxs, rs, 50)
+        left, right = splitter.split_node(y, idxs, rs)
         if not left or not right:
             return MetricLeaf(idxs)
 
