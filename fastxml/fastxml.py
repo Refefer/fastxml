@@ -126,11 +126,11 @@ class FastXML(object):
         self.sparsify = sparsify
         self.roots = []
 
-    def split_node(self, X, y, weights, idxs, splitter, rs):
+    def split_node(self, X, y, idxs, splitter, rs):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
-        return splitter.split_node(y, weights, idxs, rs)
+        return splitter.split_node(y, idxs, rs)
 
     def compute_probs(self, y, idxs, ml):
         counter = Counter(yi for i in idxs for yi in y[i])
@@ -178,8 +178,8 @@ class FastXML(object):
 
         return new_idxs
 
-    def split_train(self, X, y, weights, idxs, splitter, rs, tries=0):
-        l_idx, r_idx = self.split_node(X, y, weights, idxs, splitter, rs)
+    def split_train(self, X, y, idxs, splitter, rs, tries=0):
+        l_idx, r_idx = self.split_node(X, y, idxs, splitter, rs)
 
         clf = clf_fast = None
         if l_idx and r_idx:
@@ -191,11 +191,11 @@ class FastXML(object):
 
         return l_idx, r_idx, (clf, clf_fast)
 
-    def grow_tree(self, X, y, weights, idxs, rs, splitter):
+    def grow_tree(self, X, y, idxs, rs, splitter):
         if len(idxs) <= self.max_leaf_size:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
-        l_idx, r_idx, (clf, clff) = self.split_train(X, y, weights, idxs, splitter, rs)
+        l_idx, r_idx, (clf, clff) = self.split_train(X, y, idxs, splitter, rs)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
@@ -218,13 +218,13 @@ class FastXML(object):
                 print "Re-splitting {}".format(len(idxs))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
-                    X, y, weights, idxs, splitter, rs, tries)
+                    X, y, idxs, splitter, rs, tries)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
-        lNode = self.grow_tree(X, y, weights, l_idx, rs, splitter)
-        rNode = self.grow_tree(X, y, weights, r_idx, rs, splitter)
+        lNode = self.grow_tree(X, y, l_idx, rs, splitter)
+        rNode = self.grow_tree(X, y, r_idx, rs, splitter)
 
         return Node(lNode, rNode, clff)
 
@@ -260,7 +260,7 @@ class FastXML(object):
         if self.propensity:
             return 1 / self.compute_propensity(y, self.A, self.B)
 
-        return np.ones(max(yi for ys in y for yi in ys), dtype='float32')
+        return np.ones(max(yi for ys in y for yi in ys) + 1, dtype='float32')
 
     @staticmethod
     def compute_propensity(y, A, B):
@@ -271,7 +271,7 @@ class FastXML(object):
         N = len(y)
         C = (np.log(N) - 1) * (B + 1) ** A
         weights = []
-        for i in xrange(max(Nl)):
+        for i in xrange(max(Nl) + 1):
             weights.append(1. / (1 + C * np.exp(-A * np.log(Nl.get(i, 0) + B))))
 
         return np.array(weights, dtype='float32')
@@ -315,7 +315,7 @@ class FastXML(object):
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
                 rs = np.random.RandomState(seed=self.seed + next(counter))
-                procs.append(f(X, y, weights, next(idxs), rs, splitter))
+                procs.append(f(X, y, next(idxs), rs, splitter))
             else:
                 # Check
                 _procs = []
@@ -352,7 +352,7 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=2016):
+def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=2016, verbose=False):
     rs = np.random.RandomState(seed=seed)
     n_labels = max(yi for ys in y for yi in ys) + 1
     if propensity:
@@ -364,6 +364,9 @@ def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=20
     splitter = Splitter(weights)
 
     def _metric_cluster(idxs):
+        if verbose and len(idxs) > 1000:
+            print "Splitting:", len(idxs)
+
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 

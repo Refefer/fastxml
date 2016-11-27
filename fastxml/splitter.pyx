@@ -58,7 +58,7 @@ cdef class Splitter:
     def max_label(self):
         return self.n_labels
 
-    def split_node(self, list y,  list idxs, rs):
+    def split_node(self, list y, list idxs, rs):
         cdef vector[int] left, right
         cdef LR_SET newLeft, newRight
         cdef int i
@@ -70,7 +70,7 @@ cdef class Splitter:
             else:
                 right.push_back(i)
 
-        for _ in range(self.max_iters):
+        for idx in range(self.max_iters):
 
             # Build ndcg for the sides
             self.order_labels(y, left, self.lOrder)
