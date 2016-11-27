@@ -12,7 +12,7 @@ extensions = [
 ]
 
 setup(name='fastxml',
-      version="0.1.0",
+      version="0.2.0",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
       cmdclass = {'build_ext': build_ext},
