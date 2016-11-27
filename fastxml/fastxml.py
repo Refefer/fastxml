@@ -8,7 +8,7 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import split_node
+from .splitter import Splitter
 
 class Node(object):
     __slots__ = ('left', 'right', 'clf')
@@ -360,11 +360,14 @@ def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=20
     else:
         weights = np.ones(n_labels, dtype='float32')
 
+    # Initialize splitter
+    splitter = Splitter(n_labels)
+
     def _metric_cluster(idxs):
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 
-        left, right = split_node(y, weights, idxs, rs, n_labels, 50)
+        left, right = splitter.split_node(y, weights, idxs, rs, 50)
         if not left or not right:
             return MetricLeaf(idxs)
 

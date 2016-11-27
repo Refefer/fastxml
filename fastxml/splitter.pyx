@@ -3,6 +3,7 @@
 from collections import defaultdict
 import numpy as np
 
+cimport cython
 cimport numpy as np
 from libcpp cimport bool
 from libcpp.algorithm cimport sort as stdsort
@@ -21,6 +22,61 @@ def init_logs():
     LOGS = 1 / np.arange(2, MAX_LABELS + 2, dtype=np.float32)
 
 init_logs()
+
+cdef class Splitter:
+    cdef vector[int] left, right
+    cdef LR_SET newLeft, newRight
+    cdef int labels
+    cdef COUNTER counter 
+    cdef vector[float] lOrder, rOrder
+
+    def __init__(self, int n_labels):
+
+        # Initialize counters
+        cdef pair[int,int] p
+        p.first = p.second = 0
+
+        # Variable for NDCG sorting
+        self.counter = vector[pair[int,int]](n_labels, p)
+
+        # logs
+        self.lOrder = vector[float](n_labels, 0.0)
+        self.rOrder = vector[float](n_labels, 0.0)
+
+    def split_node(self, list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_iters = 50):
+        cdef vector[int] left, right
+        cdef LR_SET newLeft, newRight
+        cdef int iters
+
+        # Initialize counters
+        for i in idxs:
+            if rs.rand() < 0.5:
+                left.push_back(i)
+            else:
+                right.push_back(i)
+
+        iters = 0
+        while True:
+            if iters > max_iters:
+                break
+
+            iters += 1
+
+            # Build ndcg for the sides
+            order_labels(y, weights, left, self.counter, self.lOrder)
+            order_labels(y, weights, right, self.counter, self.rOrder)
+
+            # Divide out the sides
+            newLeft = divide(y, left, self.lOrder, self.rOrder)
+            newRight = divide(y, right, self.lOrder, self.rOrder)
+            if newLeft.second.empty() and newRight.first.empty():
+                # Done!
+                break
+
+            replace_vecs(left, newLeft.first, newRight.first)
+            replace_vecs(right, newLeft.second, newRight.second)
+
+        return left, right
 
 cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_right, list ls):
     """
@@ -50,12 +106,14 @@ cdef void count_labels(list y, const vector[int]& idxs, COUNTER& counts):
         for yi in y[offset]:
             counts[yi].second += 1
 
+@cython.profile(False)
 cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
     return l.second > r.second
 
 cdef void order_labels(list y, float [:] weights, vector[int]& idxs, COUNTER& counter, vector[float]& logs):
     cdef vector[float] rankings
     cdef int i, label
+    cdef float w
     cdef pair[int,int] ord
 
     # Clean and copy
@@ -72,6 +130,8 @@ cdef void order_labels(list y, float [:] weights, vector[int]& idxs, COUNTER& co
         else:
             w = weights[label]
             logs[label] = LOGS[i] * w
+
+    return
 
 cdef LR_SET divide(list y, const vector[int]& idxs, const vector[float]& lOrder, const vector[float]& rOrder):
     cdef vector[int] newLeft, newRight
@@ -100,45 +160,4 @@ cdef replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
     dest.swap(src1)
     copy_into(dest, src2)
 
-def split_node(list y, np.ndarray[np.float32_t] weights, list idxs, rs, int n_labels, int max_iters = 50):
-    cdef vector[int] left, right
-    cdef LR_SET newLeft, newRight
-    cdef int iters
 
-    # Initialize counters
-    cdef pair[int,int] p
-    p.first = p.second = 0
-    cdef COUNTER counter = vector[pair[int,int]](n_labels, p)
-
-    # Initialize orders
-    cdef vector[float] lOrder = vector[float](n_labels, 0.0)
-    cdef vector[float] rOrder = vector[float](n_labels, 0.0)
-
-    for i in idxs:
-        if rs.rand() < 0.5:
-            left.push_back(i)
-        else:
-            right.push_back(i)
-
-    iters = 0
-    while True:
-        if iters > max_iters:
-            break
-
-        iters += 1
-
-        # Build ndcg for the sides
-        order_labels(y, weights, left, counter, lOrder)
-        order_labels(y, weights, right, counter, rOrder)
-
-        # Divide out the sides
-        newLeft = divide(y, left, lOrder, rOrder)
-        newRight = divide(y, right, lOrder, rOrder)
-        if newLeft.second.empty() and newRight.first.empty():
-            # Done!
-            break
-
-        replace_vecs(left, newLeft.first, newRight.first)
-        replace_vecs(right, newLeft.second, newRight.second)
-
-    return left, right
