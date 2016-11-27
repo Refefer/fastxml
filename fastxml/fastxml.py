@@ -341,6 +341,10 @@ class MetricNode(object):
         self.left = left
         self.right = right
 
+    @property
+    def idxs(self):
+        return self.left.idxs + self.right.idxs
+
 class MetricLeaf(object):
     __slots__ = ('idxs')
     is_leaf = True
