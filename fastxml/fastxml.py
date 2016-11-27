@@ -126,11 +126,11 @@ class FastXML(object):
         self.sparsify = sparsify
         self.roots = []
 
-    def split_node(self, X, y, idxs, splitter, rs):
+    def split_node(self, idxs, splitter, rs):
         if self.verbose and len(idxs) > 1000:
             print "Splitting {}".format(len(idxs))
 
-        return splitter.split_node(y, idxs, rs)
+        return splitter.split_node(idxs, rs)
 
     def compute_probs(self, y, idxs, ml):
         counter = Counter(yi for i in idxs for yi in y[i])
@@ -178,8 +178,8 @@ class FastXML(object):
 
         return new_idxs
 
-    def split_train(self, X, y, idxs, splitter, rs, tries=0):
-        l_idx, r_idx = self.split_node(X, y, idxs, splitter, rs)
+    def split_train(self, X, idxs, splitter, rs, tries=0):
+        l_idx, r_idx = self.split_node(idxs, splitter, rs)
 
         clf = clf_fast = None
         if l_idx and r_idx:
@@ -195,7 +195,7 @@ class FastXML(object):
         if len(idxs) <= self.max_leaf_size:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
-        l_idx, r_idx, (clf, clff) = self.split_train(X, y, idxs, splitter, rs)
+        l_idx, r_idx, (clf, clff) = self.split_train(X, idxs, splitter, rs)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
@@ -218,7 +218,7 @@ class FastXML(object):
                 print "Re-splitting {}".format(len(idxs))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
-                    X, y, idxs, splitter, rs, tries)
+                    X, idxs, splitter, rs, tries)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
@@ -307,7 +307,7 @@ class FastXML(object):
 
         weights = self.compute_weights(y)
 
-        splitter = Splitter(weights)
+        splitter = Splitter(y, weights)
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
@@ -361,7 +361,7 @@ def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=20
         weights = np.ones(n_labels, dtype='float32')
 
     # Initialize splitter
-    splitter = Splitter(weights)
+    splitter = Splitter(y, weights)
 
     def _metric_cluster(idxs):
         if verbose and len(idxs) > 1000:
@@ -370,7 +370,7 @@ def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=20
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
 
-        left, right = splitter.split_node(y, idxs, rs)
+        left, right = splitter.split_node(idxs, rs)
         if not left or not right:
             return MetricLeaf(idxs)
 
