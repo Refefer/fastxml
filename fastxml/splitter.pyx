@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True, profile=True
+#cython: boundscheck=False, wraparound=False, cdivision=True
 
 from collections import defaultdict
 import numpy as np
@@ -61,7 +61,7 @@ cdef class Splitter:
     def split_node(self, list y,  list idxs, rs):
         cdef vector[int] left, right
         cdef LR_SET newLeft, newRight
-        cdef int i, iters
+        cdef int i
 
         # Initialize counters
         for i in idxs:
@@ -70,12 +70,7 @@ cdef class Splitter:
             else:
                 right.push_back(i)
 
-        iters = 0
-        while True:
-            if iters > self.max_iters:
-                break
-
-            iters += 1
+        for _ in range(self.max_iters):
 
             # Build ndcg for the sides
             self.order_labels(y, left, self.lOrder)
