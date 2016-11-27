@@ -1,9 +1,11 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True
+#cython: boundscheck=False, wraparound=False, cdivision=True, profile=True
 
 from collections import defaultdict
 import numpy as np
 
 cimport numpy as np
+from libcpp cimport bool
+from libcpp.algorithm cimport sort as stdsort
 from libcpp.vector cimport vector
 from libcpp.pair cimport pair
 
@@ -11,6 +13,8 @@ cdef int MAX_LABELS = 15000000
 cdef np.float32_t [:] LOGS
 
 ctypedef pair[vector[int],vector[int]] LR_SET
+ctypedef pair[int,int] I_PAIR
+ctypedef vector[I_PAIR] COUNTER
 
 def init_logs():
     global LOGS
@@ -18,43 +22,58 @@ def init_logs():
 
 init_logs()
 
-cdef inline float dcg(dict order, list ls):
+cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_right, list ls):
     """
     We only need to use DCG since we're only using it to determine which partition
     bucket the label set in
     """
-    cdef float log, s = 0
+    cdef int l
+    cdef float log_left, log_right, sl = 0, sr = 0
     for l in ls:
-        log = order.get(l, 0.0)
-        s += log
+        log_left  = ord_left[l]
+        log_right = ord_right[l]
+        sl += log_left
+        sr += log_right
 
-    return s
+    return sr - sl
 
-cdef object count_labels(list y, vector[int]& idxs):
-    cdef long size = idxs.size()
-    cdef int offset
-    d = defaultdict(int)
-    while size:
-        size -= 1
-        offset = idxs[size]
+cdef void count_labels(list y, const vector[int]& idxs, COUNTER& counts):
+    cdef int offset, yi, i
+    cdef I_PAIR p
+
+    for i in range(counts.size()):
+         counts[i].first = i
+         counts[i].second = 0
+        
+    for i in range(idxs.size()):
+        offset = idxs[i]
         for yi in y[offset]:
-            d[yi] += 1
+            counts[yi].second += 1
 
-    return d
+cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
+    return l.second > r.second
 
-cdef dict order_labels(list y, float [:] weights, vector[int]& idxs):
-    cdef int i, l
-    counter = count_labels(y, idxs)
-    sLabels = sorted(counter.keys(), key=counter.__getitem__, reverse=True)
-    cdef dict d = {}
-    for i in range(len(sLabels)):
-        l = sLabels[i]
-        w = weights[l]
-        d[l] = LOGS[i] * w
+cdef void order_labels(list y, float [:] weights, vector[int]& idxs, COUNTER& counter, vector[float]& logs):
+    cdef vector[float] rankings
+    cdef int i, label
+    cdef pair[int,int] ord
 
-    return d
+    # Clean and copy
+    count_labels(y, idxs, counter)
 
-cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
+    # Sort the results
+    stdsort(counter.begin(), counter.end(), &sort_pairs)
+
+    for i in range(counter.size()):
+        ord = counter[i]
+        label = ord.first
+        if ord.second == 0:
+            logs[label] = 0.0
+        else:
+            w = weights[label]
+            logs[label] = LOGS[i] * w
+
+cdef LR_SET divide(list y, const vector[int]& idxs, const vector[float]& lOrder, const vector[float]& rOrder):
     cdef vector[int] newLeft, newRight
     cdef int i, idx
     cdef float lNdcg, rNdcg
@@ -63,9 +82,8 @@ cdef LR_SET divide(list y, vector[int]& idxs, dict lOrder, dict rOrder):
     for i in range(idxs.size()):
         idx = idxs[i]
         ys = y[idx]
-        lNdcg = dcg(lOrder, ys)
-        rNdcg = dcg(rOrder, ys)
-        if lNdcg >= rNdcg:
+        ddcg = dcg(lOrder, rOrder, ys)
+        if ddcg <= 0:
             newLeft.push_back(idx)
         else:
             newRight.push_back(idx)
@@ -82,10 +100,19 @@ cdef replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
     dest.swap(src1)
     copy_into(dest, src2)
 
-def split_node(list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_iters = 50):
+def split_node(list y, np.ndarray[np.float32_t] weights, list idxs, rs, int n_labels, int max_iters = 50):
     cdef vector[int] left, right
     cdef LR_SET newLeft, newRight
     cdef int iters
+
+    # Initialize counters
+    cdef pair[int,int] p
+    p.first = p.second = 0
+    cdef COUNTER counter = vector[pair[int,int]](n_labels, p)
+
+    # Initialize orders
+    cdef vector[float] lOrder = vector[float](n_labels, 0.0)
+    cdef vector[float] rOrder = vector[float](n_labels, 0.0)
 
     for i in idxs:
         if rs.rand() < 0.5:
@@ -101,8 +128,8 @@ def split_node(list y, np.ndarray[np.float32_t] weights, list idxs, rs, int max_
         iters += 1
 
         # Build ndcg for the sides
-        lOrder = order_labels(y, weights, left)
-        rOrder = order_labels(y, weights, right)
+        order_labels(y, weights, left, counter, lOrder)
+        order_labels(y, weights, right, counter, rOrder)
 
         # Divide out the sides
         newLeft = divide(y, left, lOrder, rOrder)
