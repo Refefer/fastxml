@@ -26,7 +26,6 @@ TODO
 
 Quite a bit todo!  A base implementation using NDCG is fully working with Cython bindings to make the alternating minization reasonably fast - but a lot more could be done here:
 
-1. Inference speed up.  This will need to be done in Cython to maximize performance.  Over 50 trees with average height of ~13, it currently takes ~ 130ms per point.  That's around 650 dot products on sparse data, most of which is book keeping.  So, we move this all into Cython in a restricted format and call it a day
-2. Leaf re-ranking based on the above paper.  That should dramatically improve performance of rare labels.
-3. Propensity calculator.  Right now I'm using the suggested hyperparameters from the paper which isn't ideal depending on the dataset.
+1. Leaf re-ranking based on the above paper.  That should dramatically improve performance of rare labels.
+2. Propensity calculator.  Right now I'm using the suggested hyperparameters from the paper which isn't ideal depending on the dataset.
 <s>Abstract out Rank Metric.  This is needed to get Propensity-based ranking metrics integrated in a consistent manner.</s> This is done via the weights vector passed into Splitter
