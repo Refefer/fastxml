@@ -1,7 +1,7 @@
 import multiprocessing
 import time
 from itertools import islice, repeat
-from collections import Counter, OrderedDict, deque
+from collections import Counter, OrderedDict
 
 import numpy as np
 
@@ -140,6 +140,7 @@ class FastXML(object):
         return l_idx, r_idx, (clf, clf_fast)
 
     def grow_tree(self, X, y, idxs, rs, splitter):
+
         if len(idxs) <= self.max_leaf_size:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
