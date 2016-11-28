@@ -38,8 +38,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
-            bias=True, propensity=False, A=0.55, B=1.5, 
-            data_split=1, loss='log', sparsify=True,
+            bias=True, data_split=1, loss='log', sparsify=True,
             verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -55,9 +54,6 @@ class FastXML(object):
         self.n_epochs = n_epochs
         self.verbose = verbose
         self.bias = bias
-        self.propensity = propensity
-        self.A = A
-        self.B = B
         self.data_split = data_split
         self.loss = loss
         self.sparsify = sparsify
@@ -209,26 +205,6 @@ class FastXML(object):
 
         return s
         
-    def compute_weights(self, y):
-        if self.propensity:
-            return 1 / self.compute_propensity(y, self.A, self.B)
-
-        return np.ones(max(yi for ys in y for yi in ys) + 1, dtype='float32')
-
-    @staticmethod
-    def compute_propensity(y, A, B):
-        """
-        Computes propensity scores based on ys
-        """
-        Nl = Counter(yi for ys in y for yi in ys)
-        N = len(y)
-        C = (np.log(N) - 1) * (B + 1) ** A
-        weights = []
-        for i in xrange(max(Nl) + 1):
-            weights.append(1. / (1 + C * np.exp(-A * np.log(Nl.get(i, 0) + B))))
-
-        return np.array(weights, dtype='float32')
-
     def generate_idxs(self, dataset_len):
         if self.data_split == 1:
             return repeat(range(dataset_len))
@@ -252,15 +228,20 @@ class FastXML(object):
 
         return gen(batch_size)
 
-    def fit(self, X, y):
+    def fit(self, X, y, weights=None):
         if self.n_jobs > 1:
             f = fork_call(self.grow_tree)
         else:
             f = faux_fork_call(self.grow_tree)
 
-        weights = self.compute_weights(y)
+        nl = max(yi for ys in y for yi in ys) + 1
+        if weights is None:
+            weights = np.ones(nl, dtype='float32')
+        else:
+            assert weights.shape[0] == nl, "Weights need to be same as largest y class"
 
         splitter = Splitter(y, weights)
+
         procs = []
         finished = []
         counter = iter(xrange(self.n_trees))
@@ -306,12 +287,10 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-def metric_cluster(y, max_leaf_size=10, propensity=False, A=0.55, B=1.5, seed=2016, verbose=False):
+def metric_cluster(y, weights=None, max_leaf_size=10, seed=2016, verbose=False):
     rs = np.random.RandomState(seed=seed)
     n_labels = max(yi for ys in y for yi in ys) + 1
-    if propensity:
-        weights = 1 / FastXML.compute_propensity(y, 0.55, 1.5)
-    else:
+    if weights is None:
         weights = np.ones(n_labels, dtype='float32')
 
     # Initialize splitter
