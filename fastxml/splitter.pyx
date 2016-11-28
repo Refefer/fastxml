@@ -14,6 +14,35 @@ from libcpp.pair cimport pair
 ctypedef pair[vector[int],vector[int]] LR_SET
 ctypedef pair[int,int] I_PAIR
 ctypedef vector[I_PAIR] COUNTER
+ctypedef vector[pair[int,float]] SR
+ctypedef vector[SR] CSR
+
+@cython.profile(False)
+cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
+    return l.second > r.second
+
+cdef void copy_into(vector[int]& dest, vector[int]& src1):
+    for i in range(src1.size()):
+        dest.push_back(src1[i])
+
+cdef void replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
+    dest.swap(src1)
+    copy_into(dest, src2)
+
+cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_right, const vector[int]& ls):
+    """
+    We only need to use DCG since we're only using it to determine which partition
+    bucket the label set in
+    """
+    cdef int i, l
+    cdef float log_left, log_right, sl = 0, sr = 0
+    for i in range(ls.size()):
+        l = ls[i]
+        sl += ord_left[l]
+        sr += ord_right[l]
+
+    return sr - sl
+
 
 cdef class Splitter:
     cdef vector[int] left, right
@@ -165,30 +194,111 @@ cdef class Splitter:
         empty.second = newRight
         return empty
  
-@cython.profile(False)
-cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
-    return l.second > r.second
+cdef class Node:
+    cdef int idx
+    cdef bool is_leaf
 
-cdef void copy_into(vector[int]& dest, vector[int]& src1):
-    for i in range(src1.size()):
-        dest.push_back(src1[i])
+cdef class INode(Node):
+    cdef Node left
+    cdef Node right
 
-cdef void replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
-    dest.swap(src1)
-    copy_into(dest, src2)
+    def __init__(self, int idx, Node left, Node right):
+        self.is_leaf = False
+        self.idx = idx
+        self.left = left
+        self.right = right
 
-cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_right, const vector[int]& ls):
-    """
-    We only need to use DCG since we're only using it to determine which partition
-    bucket the label set in
-    """
-    cdef int i, l
-    cdef float log_left, log_right, sl = 0, sr = 0
-    for i in range(ls.size()):
-        l = ls[i]
-        sl += ord_left[l]
-        sr += ord_right[l]
+cdef class Leaf(Node):
+    def __init__(self, const int idx):
+        self.is_leaf = True
+        self.idx = idx
 
-    return sr - sl
+cdef class PTree:
+    cdef CSR weights
+    cdef vector[float] bias
+    cdef Node root
+    cdef list payloads
 
+    def __init__(self, object tree):
+        self.payloads = []
+        self.root = self.build_tree(tree)
 
+    cdef SR convert_to_dense(self, const int [:] indices, const float [:] data, const int size):
+        cdef SR sparse
+        cdef pair[int,float] p
+        cdef int i
+
+        for i in range(size):
+            p = pair[int,float]()
+            p.first = indices[i]
+            p.second = data[i]
+            sparse.push_back(p)
+
+        return sparse
+
+    cdef Node build_tree(self, object tree):
+        cdef int idx
+        cdef float bias
+        cdef Node left, right, node
+        cdef np.ndarray[np.float32_t] data
+        cdef np.ndarray[np.int32_t] indices
+
+        if not tree.is_leaf:
+            idx = self.weights.size()
+
+            # Convert sparse weights to SR
+            indices = tree.w.indices
+            data = tree.w.data
+            self.weights.push_back(self.convert_to_dense(indices, data, data.shape[0]))
+
+            # Convert bias to float
+            bias = tree.b[0]
+            self.bias.push_back(bias)
+
+            # Build subtree
+            left  = self.build_tree(tree.left)
+            right = self.build_tree(tree.right)
+            
+            return INode(idx, left, right)
+        else:
+            idx = len(self.payloads)
+            self.payloads.append(tree.probs)
+            return Leaf(idx)
+    
+    cdef float dot(self, const SR& x, const SR& w, const float bias):
+        cdef int xidx = 0, widx = 0, xi, wi
+        cdef int x_s = x.size(), w_s = w.size()
+        cdef float tally = 0.0
+
+        while xidx < x_s and widx < w_s:
+            xi = x[xidx].first 
+            wi = w[widx].first
+            if xi < wi:
+                xidx += 1
+            elif xi > wi:
+                widx += 1
+            else:
+                tally += x[xidx].second * w[widx].second
+                xidx += 1
+                widx += 1
+
+        return tally + bias
+
+    def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
+        cdef SR x = self.convert_to_dense(indices, data, data.shape[0])
+        cdef SR w
+        cdef float b, d
+        cdef INode inode
+
+        cdef Node node = self.root
+        while not node.is_leaf:
+            inode = <INode>node
+            w = self.weights[node.idx]
+            b = self.bias[node.idx]
+            d = self.dot(x, w, b)
+            if d < 0:
+                node = inode.left
+            else:
+                node = inode.right
+
+        return self.payloads[node.idx]

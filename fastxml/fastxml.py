@@ -8,100 +8,39 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import Splitter
+from .splitter import Splitter, PTree
+from .proc import faux_fork_call, fork_call
 
 class Node(object):
-    __slots__ = ('left', 'right', 'clf')
-    def __init__(self, left, right, clf):
+    is_leaf = False
+    def __init__(self, left, right, w, b):
         self.left = left
         self.right = right
-        self.clf = clf
-
-    def traverse(self, X):
-        c = self.clf.predict(X)[0]
-        if c == 0:
-            return self.left
-
-        return self.right
+        self.w = w
+        self.b = b
 
 class Leaf(object):
+    is_leaf = True
     def __init__(self, probs):
         self.probs = probs
 
 class CLF(object):
-    __slots__ = ('w', 'inter')
-
-    def __init__(self, w, inter):
+    __slots__ = ('w', 'b')
+    def __init__(self, w, bias):
         self.w = w
-        self.inter = inter
-
-    def predict(self, X):
-        k = self.w.dot(X) + self.inter
-        return [0 if k < 0 else 1]
+        self.b = bias
 
 def stack(X):
     stacker = np.vstack if isinstance(X[0], np.ndarray) else sp.vstack
     return stacker(X)
 
-class Result(object):
-
-    def ready(self):
-        raise NotImplementedError()
-
-    def get(self):
-        raise NotImplementedError()
-
-class ForkResult(Result):
-    def __init__(self, queue, p):
-        self.queue = queue
-        self.p = p 
-
-    def ready(self):
-        return self.queue.full()
-
-    def get(self):
-        result = self.queue.get()
-        self.p.join()
-        self.queue.close()
-        return result
-
-class SingleResult(Result):
-    def __init__(self, res):
-        self.res = res
-
-    def ready(self):
-        return True
-
-    def get(self):
-        return self.res
-
-def _remote_call(q, f, args):
-    results = f(*args)
-    q.put(results)
-
-def faux_fork_call(f):
-    def f2(*args):
-        return SingleResult(f(*args))
-
-    return f2
-
-def fork_call(f):
-    def f2(*args):
-        queue = multiprocessing.Queue(1)
-        p = multiprocessing.Process(target=_remote_call, args=(queue, f, args))
-        p.start()
-        return ForkResult(queue, p)
-
-    return f2
-
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=False, n_jobs=1, alpha=1e-4, n_epochs=2,
-            downsample=None, bias=True, propensity=False, A=0.55, B=1.5, 
+            bias=True, propensity=False, A=0.55, B=1.5, 
             data_split=1, loss='log', retry_re_split=5, sparsify=True,
             verbose=False, seed=2016):
-        assert downsample in (None, 'float32', 'float16')
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
         self.max_labels_per_leaf = max_labels_per_leaf
@@ -115,7 +54,6 @@ class FastXML(object):
         self.seed = seed
         self.n_epochs = n_epochs
         self.verbose = verbose
-        self.downsample = downsample
         self.bias = bias
         self.propensity = propensity
         self.A = A
@@ -162,12 +100,23 @@ class FastXML(object):
             clf.sparsify()
 
         # Halves the memory requirement
-        if self.downsample is not None:
-            clf.coef_ = clf.coef_.astype(self.downsample)
-            if self.bias:
-                clf.intercept_ = clf.intercept_.astype(self.downsample)
+        clf.coef_ = clf.coef_.astype('float32')
+        if self.bias:
+            clf.intercept_ = clf.intercept_.astype('float32')
 
         return clf, CLF(clf.coef_, clf.intercept_)
+
+    def __reduce__(self):
+        d = self.__dict__.copy()
+        if 'f_roots' in d:
+            del d['f_roots']
+
+        return (FastXML, (), d)
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+        if 'roots' in d:
+            self.optimize()
 
     @staticmethod
     def resplit_data(X, idxs, clf, classes):
@@ -226,21 +175,25 @@ class FastXML(object):
         lNode = self.grow_tree(X, y, l_idx, rs, splitter)
         rNode = self.grow_tree(X, y, r_idx, rs, splitter)
 
-        return Node(lNode, rNode, clff)
+        return Node(lNode, rNode, clff.w, clff.b)
+
+    def _predict_opt(self, X):
+        probs = []
+        for tree in self.f_roots:
+            probs.append(tree.predict(X.data, X.indices))
+
+        return sum(probs) / len(probs)
+
+    def optimize(self):
+        self.f_roots = [PTree(r) for r in self.roots]
 
     def predict(self, X, fmt='sparse'):
         assert fmt in ('sparse', 'dict')
         s = []
+        f = self._predict_opt if hasattr(self, 'f_roots') else self._predict_classic
         for i in xrange(X.shape[0]):
-            x = X[i].T
-            probs = []
-            for tree in self.roots:
-                while not isinstance(tree, Leaf):
-                    tree = tree.traverse(x)
+            mean = f(X[i])
 
-                probs.append(tree.probs)
-        
-            mean = sum(probs) / len(probs)
             if fmt == 'sparse':
                 s.append(mean)
 
@@ -332,6 +285,7 @@ class FastXML(object):
                 procs = _procs
 
         self.roots = finished
+        self.optimize()
 
 class MetricNode(object):
     __slots__ = ('left', 'right')
