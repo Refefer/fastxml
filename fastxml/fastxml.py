@@ -37,9 +37,9 @@ def stack(X):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=False, n_jobs=1, alpha=1e-4, n_epochs=2,
+            re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
             bias=True, propensity=False, A=0.55, B=1.5, 
-            data_split=1, loss='log', retry_re_split=5, sparsify=True,
+            data_split=1, loss='log', sparsify=True,
             verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -60,7 +60,6 @@ class FastXML(object):
         self.B = B
         self.data_split = data_split
         self.loss = loss
-        self.retry_re_split = retry_re_split
         self.sparsify = sparsify
         self.roots = []
 
@@ -150,7 +149,7 @@ class FastXML(object):
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
         # Resplit the data
-        for tries in xrange(self.retry_re_split if self.re_split else 0):
+        for tries in xrange(self.re_split):
 
             if self.verbose and len(idxs) >= 1000:
                 print "Resplit-before: {}".format((len(l_idx), len(r_idx)))
@@ -163,7 +162,7 @@ class FastXML(object):
 
             if l_idx and r_idx: break
 
-            if self.verbose:
+            if self.verbose and len(idxs) > 1000:
                 print "Re-splitting {}".format(len(idxs))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
