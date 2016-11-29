@@ -75,21 +75,42 @@ class FastXML(object):
 
         return sp.csr_matrix((v, (i, j)), shape=(1, ml)).astype('float32')
 
-    def train_clf(self, X, idxss, rs, tries=0):
-        X_train = []
+    def build_X(self, X, idxs):
+        indptr = [0]
+        indices = []
+        data = []
+        for idx in idxs:
+            s = X[idx]
+            indices.append(s.indices)
+            data.append(s.data)
+            indptr.append(indptr[-1] + s.indices.shape[0])
+
+        X_train = sp.csr_matrix((len(data), X[0].shape[1]), dtype=X[0].dtype.name)
+        X_train.indptr = np.array(indptr, dtype=np.int32)
+        X_train.indices = np.concatenate(indices)
+        X_train.data = np.concatenate(data)
+        return X_train
+
+    def build_XY(self, X, idxss):
         y_train = []
 
+        idxes = []
         for i, idxs in enumerate(idxss):
-            for idx in idxs:
-                X_train.append(X[idx])
-
+            idxes.extend(idxs)
             y_train.extend([i] * len(idxs))
 
+        X_train = self.build_X(X, idxes)
+        return X_train, y_train
+
+
+    def train_clf(self, X, idxss, rs, tries=0):
         clf = SGDClassifier(loss=self.loss, penalty='l1', n_iter=self.n_epochs + tries, 
                 alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                 random_state=rs)
 
-        clf.fit(stack(X_train), y_train)
+        X_train, y_train = self.build_XY(X, idxss)
+
+        clf.fit(X_train, y_train)
 
         # Halves the memory requirement
         clf.coef_ = sparsify(clf.coef_)
@@ -110,11 +131,10 @@ class FastXML(object):
         if 'roots' in d:
             self.optimize()
 
-    @staticmethod
-    def resplit_data(X, idxs, clf, classes):
-        X_train = [X[i] for i in idxs]
+    def resplit_data(self, X, idxs, clf, classes):
+        X_train = self.build_X(X, idxs)
         new_idxs = [[] for _ in xrange(classes)]
-        for i, k in enumerate(clf.predict(stack(X_train))):
+        for i, k in enumerate(clf.predict(X_train)):
             new_idxs[k].append(idxs[i])
 
         return new_idxs
