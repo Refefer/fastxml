@@ -246,6 +246,7 @@ class FastXML(object):
         return gen(batch_size)
 
     def fit(self, X, y, weights=None):
+        assert isinstance(X, list) and isinstance(X[0], sp.csr_matrix), "Requires list of csr_matrix"
         if self.n_jobs > 1:
             f = fork_call(self.grow_tree)
         else:
