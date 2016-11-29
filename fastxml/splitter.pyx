@@ -2,14 +2,15 @@
 
 from collections import defaultdict
 import numpy as np
+import scipy.sparse as sp
 
 cimport cython
 cimport numpy as np
+
 from libcpp cimport bool
 from libcpp.algorithm cimport sort as stdsort
 from libcpp.vector cimport vector
 from libcpp.pair cimport pair
-
 
 ctypedef pair[vector[int],vector[int]] LR_SET
 ctypedef pair[int,int] I_PAIR
@@ -286,6 +287,10 @@ cdef class PTree:
 
     def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
         cdef SR x = self.convert_to_dense(indices, data, data.shape[0])
+        cdef int idx = self.predict_sr(x)
+        return self.payloads[idx]
+
+    cdef int predict_sr(self, SR& x):
         cdef SR w
         cdef float b, d
         cdef INode inode
@@ -301,4 +306,41 @@ cdef class PTree:
             else:
                 node = inode.right
 
-        return self.payloads[node.idx]
+        return node.idx
+
+def sparsify(np.ndarray[np.float64_t, ndim=2] dense, float eps=1e-6):
+    """
+    More work speeding up common operations that at large N add up to real time
+    """
+    cdef double [:, :] npv = dense
+    cdef int i, count = 0
+    cdef double n
+    cdef vector[int] col
+    cdef vector[float] data
+
+    for i in range(npv.shape[1]):
+        n = npv[0,i]
+        if n > eps: 
+            count += 1
+            data.push_back(<float>n)
+            col.push_back(i)
+
+    cdef np.ndarray[np.int32_t] ip = np.zeros(2, dtype=np.int32)
+    cdef np.ndarray[np.int32_t] c = np.zeros(count, dtype=np.int32)
+    cdef np.ndarray[np.float32_t] d = np.zeros(count, dtype=np.float32)
+
+    cdef int [:] cv = c
+    cdef float [:] dv = d
+    for i in range(count):
+        cv[i] = col[i]
+        dv[i] = data[i]
+
+    cv = ip
+    cv[1] = count
+
+    csr = sp.csr_matrix((1, npv.shape[1]), dtype='float32')
+    csr.indptr = ip
+    csr.indices = c
+    csr.data = d
+
+    return csr

@@ -8,7 +8,7 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import Splitter, PTree
+from .splitter import Splitter, PTree, sparsify
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -38,7 +38,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
-            bias=True, data_split=1, loss='log', sparsify=True,
+            bias=True, data_split=1, loss='log', 
             verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -56,7 +56,6 @@ class FastXML(object):
         self.bias = bias
         self.data_split = data_split
         self.loss = loss
-        self.sparsify = sparsify
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -91,11 +90,9 @@ class FastXML(object):
                 random_state=rs)
 
         clf.fit(stack(X_train), y_train)
-        if self.sparsify:
-            clf.sparsify()
 
         # Halves the memory requirement
-        clf.coef_ = clf.coef_.astype('float32')
+        clf.coef_ = sparsify(clf.coef_)
         if self.bias:
             clf.intercept_ = clf.intercept_.astype('float32')
 
