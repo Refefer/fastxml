@@ -52,6 +52,7 @@ cdef class Splitter:
     cdef int n_labels, max_iters
 
     cdef COUNTER counter 
+
     cdef vector[float] lOrder, rOrder, weights, logs
     cdef vector[vector[int]] yset
 
@@ -152,6 +153,29 @@ cdef class Splitter:
 
         return
 
+    cdef void sort_counter(self):
+        # Since this is potentially very sparse, we do a single pass moving non-empty
+        # pairs to the front of counter
+        cdef pair[int,int] tmp
+        cdef size_t i = 0, j = self.counter.size() - 1
+        while i < j:
+            if self.counter[i].second > 0:
+                i += 1
+            elif self.counter[j].second == 0:
+                j -= 1
+            else:
+                # swap
+                tmp = self.counter[i]
+                self.counter[i] = self.counter[j]
+                self.counter[j] = tmp
+                i += 1
+                j -= 1
+
+        # Partial sort only up to i
+        stdsort(self.counter.begin(), 
+                self.counter.begin() + i + 1, 
+                &sort_pairs)
+
     cdef void order_labels(self, const vector[int]& idxs, vector[float]& logs):
         cdef vector[float] rankings
         cdef int i, label
@@ -162,7 +186,7 @@ cdef class Splitter:
         self.count_labels(idxs)
 
         # Sort the results
-        stdsort(self.counter.begin(), self.counter.end(), &sort_pairs)
+        self.sort_counter()
 
         for i in range(self.counter.size()):
             ord = self.counter[i]
