@@ -137,6 +137,68 @@ cdef class DenseNDCGSplitter(NDCGSplitter):
 
         return
 
+cdef class SparseNDCGSplitter(NDCGSplitter):
+    cdef int n_labels
+    cdef vector[I_PAIR] sorter
+    cdef unordered_map[int,int] counter
+
+    def __init__(self, const int n_labels):
+        pass
+
+    cdef void count_labels(self, const vector[int]& idxs, const YSET& yset):
+        cdef int offset, yi, i, label
+        cdef vector[int] ys
+
+        self.counter.clear()
+        for i in range(idxs.size()):
+            offset = idxs[i]
+            ys = yset[offset]
+            for yi in range(ys.size()):
+                label = ys[yi]
+                inc(self.counter[label])
+
+    cdef void sort_counter(self):
+
+        # Copy it into a new vector
+        cdef unordered_map[int,int].iterator b = self.counter.begin()
+        cdef unordered_map[int,int].iterator e = self.counter.end()
+
+        self.sorter.clear()
+
+        while b != e:
+            self.sorter.push_back(deref(b))
+            inc(b)
+
+        stdsort(self.sorter.begin(), self.sorter.end(), &sort_pairs)
+
+    cdef void fill(self, vector[float]& k):
+        cdef int size = k.size()
+        for i in range(size):
+            k[i] = 0.0
+
+    cdef void order_labels(self, const vector[int]& idxs, const YSET& yset, 
+            const vector[float]& weights, vector[float]& p_logs, vector[float]& logs):
+        cdef int i, label
+        cdef float w
+        cdef pair[int,int] ord
+
+        # Clean and copy
+        self.count_labels(idxs, yset)
+
+        # No access to std::fill, so write it yourself
+        self.fill(logs)
+
+        # Sort the results
+        self.sort_counter()
+
+        for i in range(self.sorter.size()):
+            ord = self.sorter[i]
+            label = ord.first
+            w = weights[label]
+            logs[label] = p_logs[i] * w
+
+        return
+
 cdef class Splitter:
     cdef vector[int] left, right
     cdef LR_SET newLeft, newRight
@@ -144,6 +206,7 @@ cdef class Splitter:
     cdef int n_labels, max_iters
 
     cdef NDCGSplitter dense
+    cdef NDCGSplitter sparse
 
     cdef vector[float] lOrder, rOrder, weights, logs
     cdef vector[vector[int]] yset
@@ -159,6 +222,7 @@ cdef class Splitter:
 
         # Variable for NDCG sorting
         self.dense = DenseNDCGSplitter(n_labels)
+        self.sparse = SparseNDCGSplitter(n_labels)
 
         # ndcg cache
         self.lOrder = vector[float](n_labels, 0.0)
@@ -213,8 +277,8 @@ cdef class Splitter:
         for idx in range(self.max_iters):
 
             # Build ndcg for the sides
-            self.dense.order_labels(left, self.yset, self.weights, self.logs, self.lOrder)
-            self.dense.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
+            self.sparse.order_labels(left, self.yset, self.weights, self.logs, self.lOrder)
+            self.sparse.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
 
             # Divide out the sides
             newLeft = self.divide(left)
