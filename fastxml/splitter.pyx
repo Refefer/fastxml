@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True, profile=True
+#cython: boundscheck=False, wraparound=False, profile=True
 
 from collections import defaultdict
 import numpy as np
@@ -7,6 +7,9 @@ import scipy.sparse as sp
 cimport cython
 cimport numpy as np
 
+from libc.math cimport log
+from cython.operator cimport dereference as deref, preincrement as inc
+from libcpp.unordered_map cimport unordered_map
 from libcpp cimport bool
 from libcpp.algorithm cimport sort as stdsort
 from libcpp.vector cimport vector
@@ -204,6 +207,7 @@ cdef class Splitter:
     cdef LR_SET newLeft, newRight
 
     cdef int n_labels, max_iters
+    cdef float sparse_multiple
 
     cdef NDCGSplitter dense
     cdef NDCGSplitter sparse
@@ -211,7 +215,10 @@ cdef class Splitter:
     cdef vector[float] lOrder, rOrder, weights, logs
     cdef vector[vector[int]] yset
 
-    def __init__(self, list y, np.ndarray[np.float32_t] ws, const int max_iters=50):
+    def __init__(self, list y, 
+            const np.ndarray[np.float32_t] ws, 
+            const float sparse_multiple,
+            const int max_iters=50):
 
         # Initialize counters
         cdef pair[int,int] p
@@ -221,6 +228,7 @@ cdef class Splitter:
         self.n_labels = n_labels
 
         # Variable for NDCG sorting
+        self.sparse_multiple = sparse_multiple
         self.dense = DenseNDCGSplitter(n_labels)
         self.sparse = SparseNDCGSplitter(n_labels)
 
@@ -262,9 +270,17 @@ cdef class Splitter:
     def max_label(self):
         return self.n_labels
 
+    cdef bool use_sparse(self, const int k):
+        """
+        Compute the ratio
+        """
+        cdef float klogk = k * log(k) / log(2)
+        return (klogk + self.n_labels) > (self.sparse_multiple * klogk)
+
     def split_node(self, list idxs, rs):
         cdef vector[int] left, right
         cdef LR_SET newLeft, newRight
+        cdef NDCGSplitter splitter
         cdef int i
 
         # Initialize counters
@@ -274,11 +290,18 @@ cdef class Splitter:
             else:
                 right.push_back(i)
 
+        cdef float ratio = (left.size() + right.size()) / <float>self.yset.size()
+        cdef int k = <int>(ratio * self.n_labels)
+        if self.use_sparse(k):
+            splitter = self.sparse
+        else:
+            splitter = self.dense
+
         for idx in range(self.max_iters):
 
             # Build ndcg for the sides
-            self.sparse.order_labels(left, self.yset, self.weights, self.logs, self.lOrder)
-            self.sparse.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
+            splitter.order_labels(left, self.yset, self.weights, self.logs, self.lOrder)
+            splitter.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
 
             # Divide out the sides
             newLeft = self.divide(left)
@@ -291,7 +314,6 @@ cdef class Splitter:
             replace_vecs(right, newLeft.second, newRight.second)
 
         return left, right
-
 
     cdef LR_SET divide(self, const vector[int]& idxs):
         cdef vector[int] newLeft, newRight

@@ -38,7 +38,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
-            bias=True, data_split=1, loss='log', 
+            bias=True, data_split=1, loss='log', sparse_multiple=25,
             verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -56,6 +56,7 @@ class FastXML(object):
         self.bias = bias
         self.data_split = data_split
         self.loss = loss
+        self.sparse_multiple = sparse_multiple
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -258,7 +259,7 @@ class FastXML(object):
         else:
             assert weights.shape[0] == nl, "Weights need to be same as largest y class"
 
-        splitter = Splitter(y, weights)
+        splitter = Splitter(y, weights, self.sparse_multiple)
 
         procs = []
         finished = []
@@ -305,14 +306,15 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-def metric_cluster(y, weights=None, max_leaf_size=10, seed=2016, verbose=False):
+def metric_cluster(y, weights=None, max_leaf_size=10, 
+        sparse_multiple=25, seed=2016, verbose=False):
     rs = np.random.RandomState(seed=seed)
     n_labels = max(yi for ys in y for yi in ys) + 1
     if weights is None:
         weights = np.ones(n_labels, dtype='float32')
 
     # Initialize splitter
-    splitter = Splitter(y, weights)
+    splitter = Splitter(y, weights, sparse_multiple)
 
     def _metric_cluster(idxs):
         if verbose and len(idxs) > 1000:
