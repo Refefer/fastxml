@@ -15,6 +15,7 @@ from libcpp.pair cimport pair
 ctypedef pair[vector[int],vector[int]] LR_SET
 ctypedef pair[int,int] I_PAIR
 ctypedef vector[I_PAIR] COUNTER
+ctypedef vector[vector[int]] YSET
 ctypedef vector[pair[int,float]] SR
 ctypedef vector[SR] CSR
 
@@ -50,6 +51,91 @@ cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_ri
 
     return sr - sl
 
+cdef class NDCGSplitter:
+    cdef void order_labels(self, const vector[int]& idxs, const YSET& yset, 
+            const vector[float]& weights, vector[float]& p_logs, vector[float]& logs):
+        return
+
+cdef class DenseNDCGSplitter(NDCGSplitter):
+    cdef int n_labels
+    cdef vector[I_PAIR] counter
+
+    def __init__(self, const int n_labels):
+
+        cdef pair[int,int] p
+        p.first = p.second = 0
+
+        # Variable for NDCG sorting
+        self.counter = vector[I_PAIR](n_labels, p)
+
+    cdef void count_labels(self, const vector[int]& idxs, const YSET& yset):
+
+        cdef int offset, yi, i, label
+        cdef vector[int] ys
+
+        # Clear the counter
+        for i in range(self.counter.size()):
+             self.counter[i].first = i
+             self.counter[i].second = 0
+            
+        for i in range(idxs.size()):
+            offset = idxs[i]
+            ys = yset[offset]
+            for yi in range(ys.size()):
+                label = ys[yi]
+                self.counter[label].second += 1
+
+        return
+
+    cdef void sort_counter(self):
+        # Since this is potentially very sparse, we do a single pass moving non-empty
+        # pairs to the front of counter
+        cdef pair[int,int] tmp
+        cdef size_t i = 0, j = self.counter.size() - 1
+        while i < j:
+            if self.counter[i].second > 0:
+                i += 1
+            elif self.counter[j].second == 0:
+                j -= 1
+            else:
+                # swap
+                tmp = self.counter[i]
+                self.counter[i] = self.counter[j]
+                self.counter[j] = tmp
+                i += 1
+                j -= 1
+
+        # Partial sort only up to i
+        stdsort(self.counter.begin(), 
+                self.counter.begin() + i + 1, 
+                &sort_pairs)
+
+    cdef void order_labels(self, const vector[int]& idxs, const YSET& yset, 
+            const vector[float]& weights, vector[float]& p_logs, vector[float]& logs):
+
+        cdef int i, label
+        cdef float w
+        cdef pair[int,int] ord
+
+        # Clean and copy
+        self.count_labels(idxs, yset)
+
+        # Sort the results
+        self.sort_counter()
+
+        for i in range(self.counter.size()):
+            ord = self.counter[i]
+            label = ord.first
+            if ord.second == 0:
+                break
+            else:
+                w = weights[label]
+                logs[label] = p_logs[i] * w
+
+        for l in range(i, self.counter.size()):
+            logs[self.counter[l].first] = 0.0
+
+        return
 
 cdef class Splitter:
     cdef vector[int] left, right
@@ -57,7 +143,7 @@ cdef class Splitter:
 
     cdef int n_labels, max_iters
 
-    cdef COUNTER counter 
+    cdef NDCGSplitter dense
 
     cdef vector[float] lOrder, rOrder, weights, logs
     cdef vector[vector[int]] yset
@@ -72,7 +158,7 @@ cdef class Splitter:
         self.n_labels = n_labels
 
         # Variable for NDCG sorting
-        self.counter = vector[pair[int,int]](n_labels, p)
+        self.dense = DenseNDCGSplitter(n_labels)
 
         # ndcg cache
         self.lOrder = vector[float](n_labels, 0.0)
@@ -127,8 +213,8 @@ cdef class Splitter:
         for idx in range(self.max_iters):
 
             # Build ndcg for the sides
-            self.order_labels(left, self.lOrder)
-            self.order_labels(right, self.rOrder)
+            self.dense.order_labels(left, self.yset, self.weights, self.logs, self.lOrder)
+            self.dense.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
 
             # Divide out the sides
             newLeft = self.divide(left)
@@ -142,68 +228,6 @@ cdef class Splitter:
 
         return left, right
 
-    cdef void count_labels(self, const vector[int]& idxs):
-        cdef int offset, yi, i, label
-        cdef vector[int] ys
-
-        for i in range(self.counter.size()):
-             self.counter[i].first = i
-             self.counter[i].second = 0
-            
-        for i in range(idxs.size()):
-            offset = idxs[i]
-            ys = self.yset[offset]
-            for yi in range(ys.size()):
-                label = ys[yi]
-                self.counter[label].second += 1
-
-        return
-
-    cdef void sort_counter(self):
-        # Since this is potentially very sparse, we do a single pass moving non-empty
-        # pairs to the front of counter
-        cdef pair[int,int] tmp
-        cdef size_t i = 0, j = self.counter.size() - 1
-        while i < j:
-            if self.counter[i].second > 0:
-                i += 1
-            elif self.counter[j].second == 0:
-                j -= 1
-            else:
-                # swap
-                tmp = self.counter[i]
-                self.counter[i] = self.counter[j]
-                self.counter[j] = tmp
-                i += 1
-                j -= 1
-
-        # Partial sort only up to i
-        stdsort(self.counter.begin(), 
-                self.counter.begin() + i + 1, 
-                &sort_pairs)
-
-    cdef void order_labels(self, const vector[int]& idxs, vector[float]& logs):
-        cdef vector[float] rankings
-        cdef int i, label
-        cdef float w
-        cdef pair[int,int] ord
-
-        # Clean and copy
-        self.count_labels(idxs)
-
-        # Sort the results
-        self.sort_counter()
-
-        for i in range(self.counter.size()):
-            ord = self.counter[i]
-            label = ord.first
-            if ord.second == 0:
-                logs[label] = 0.0
-            else:
-                w = self.weights[label]
-                logs[label] = self.logs[i] * w
-
-        return
 
     cdef LR_SET divide(self, const vector[int]& idxs):
         cdef vector[int] newLeft, newRight
