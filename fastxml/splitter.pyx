@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, cdivision=True
+#cython: boundscheck=False, wraparound=False, cdivision=True, profile=True
 
 from collections import defaultdict
 import numpy as np
@@ -20,7 +20,13 @@ ctypedef vector[SR] CSR
 
 @cython.profile(False)
 cdef bool sort_pairs(const I_PAIR& l, const I_PAIR& r):
-    return l.second > r.second
+    if l.second > r.second:
+        return True
+
+    if l.second < r.second:
+        return False
+
+    return l.first > r.first
 
 cdef void copy_into(vector[int]& dest, vector[int]& src1):
     for i in range(src1.size()):
