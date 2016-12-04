@@ -8,11 +8,12 @@ from Cython.Distutils import build_ext
 #from Cython.Build import cythonize
 
 extensions = [
-  Extension("fastxml.splitter", ["fastxml/splitter.pyx"], language='c++', extra_compile_args=['-O3'])
+  Extension("fastxml.splitter", ["fastxml/splitter.pyx"], 
+      language='c++', extra_compile_args=['-O3', '-std=gnu++11'])
 ]
 
 setup(name='fastxml',
-      version="0.3.0",
+      version="0.3.1",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
       cmdclass = {'build_ext': build_ext},
