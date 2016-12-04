@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, profile=True
+#cython: boundscheck=False, wraparound=False
 
 from collections import defaultdict
 import numpy as np
@@ -216,7 +216,7 @@ cdef class Splitter:
     cdef vector[vector[int]] yset
 
     def __init__(self, list y, 
-            const np.ndarray[np.float32_t] ws, 
+            np.ndarray[np.float32_t] ws, 
             const float sparse_multiple,
             const int max_iters=50):
 
