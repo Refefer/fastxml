@@ -38,7 +38,7 @@ class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
-            bias=True, data_split=1, loss='log', sparse_multiple=25,
+            bias=True, subsample=1, loss='log', sparse_multiple=25,
             verbose=False, seed=2016):
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -54,7 +54,7 @@ class FastXML(object):
         self.n_epochs = n_epochs
         self.verbose = verbose
         self.bias = bias
-        self.data_split = data_split
+        self.subsample = subsample
         self.loss = loss
         self.sparse_multiple = sparse_multiple
         self.roots = []
@@ -87,9 +87,9 @@ class FastXML(object):
             indptr.append(indptr[-1] + s.indices.shape[0])
 
         X_train = sp.csr_matrix((len(data), X[0].shape[1]), dtype=X[0].dtype.name)
-        X_train.indptr = np.array(indptr, dtype=np.int32)
+        X_train.indptr  = np.array(indptr, dtype=np.int32)
         X_train.indices = np.concatenate(indices)
-        X_train.data = np.concatenate(data)
+        X_train.data    = np.concatenate(data)
         return X_train
 
     def build_XY(self, X, idxss):
@@ -166,14 +166,8 @@ class FastXML(object):
         # Resplit the data
         for tries in xrange(self.re_split):
 
-            if self.verbose and len(idxs) >= 1000:
-                print "Resplit-before: {}".format((len(l_idx), len(r_idx)))
-
             if clf is not None:
                 l_idx, r_idx = self.resplit_data(X, idxs, clf, 2)
-
-            if self.verbose and len(idxs) >= 1000:
-                print "Resplit-after: {}".format((len(l_idx), len(r_idx)))
 
             if l_idx and r_idx: break
 
@@ -224,11 +218,11 @@ class FastXML(object):
         return s
         
     def generate_idxs(self, dataset_len):
-        if self.data_split == 1:
+        if self.subsample == 1:
             return repeat(range(dataset_len))
 
-        batch_size = int(dataset_len * self.data_split) \
-                if self.data_split < 1 else self.data_split
+        batch_size = int(dataset_len * self.subsample) \
+                if self.subsample < 1 else self.subsample
 
         if batch_size > dataset_len:
             raise Exception("dataset subset is larger than dataset")

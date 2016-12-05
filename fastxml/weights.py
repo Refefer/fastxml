@@ -6,6 +6,10 @@ def metrics(y):
     N = len(y)
     return N, Nl, max(Nl) + 1
 
+def uniform(y):
+    N, Nl, ml = metrics(y)
+    return np.ones(ml, dtype='float32')
+
 def propensity(y, A=0.55, B=1.5):
     """
     Computes propensity scores based on ys
