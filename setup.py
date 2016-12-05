@@ -13,13 +13,14 @@ extensions = [
 ]
 
 setup(name='fastxml',
-      version="0.3.1",
+      version="0.4.0",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
       cmdclass = {'build_ext': build_ext},
       ext_modules=extensions,
       packages=['fastxml'],
       scripts=[
+          "bin/fxml.py"
       ],
       install_requires=[
         "numpy>=1.8.1",
