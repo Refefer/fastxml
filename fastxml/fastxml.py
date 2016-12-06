@@ -1,9 +1,10 @@
 import multiprocessing
 import time
-from itertools import islice, repeat
-from collections import Counter, OrderedDict
+from itertools import islice, repeat, izip
+from collections import Counter, OrderedDict, defaultdict
 
 import numpy as np
+import scipy.sparse as sp
 
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
@@ -37,9 +38,10 @@ def stack(X):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2,
-            bias=True, subsample=1, loss='log', sparse_multiple=25,
-            verbose=False, seed=2016):
+            re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, bias=True, 
+            subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
+            gamma=30, blend=0.5, verbose=False, seed=2016):
+
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
         self.max_labels_per_leaf = max_labels_per_leaf
@@ -57,6 +59,9 @@ class FastXML(object):
         self.subsample = subsample
         self.loss = loss
         self.sparse_multiple = sparse_multiple
+        self.leaf_classifiers = leaf_classifiers
+        self.gamma = gamma
+        self.blend = blend
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -195,12 +200,31 @@ class FastXML(object):
     def optimize(self):
         self.f_roots = [PTree(r) for r in self.roots]
 
+    def _add_leaf_probs(self, X, ypi):
+        Xn = self._l2norm(X)
+        indices = []
+        lyp = []
+        for yi in ypi.indices:
+            ux = self.uxs_[yi]
+            xr = self.xr_[yi]
+
+            # distance
+            hl = ((Xn - ux).data ** 2).sum()
+            k = np.exp(self.gamma  * (hl - xr)) 
+            indices.append(yi)
+            lyp.append(1. / (1. + k))
+
+        # Blend leaf and tree probabilities
+        nps = self.blend * ypi.data + (1 - self.blend) * np.array(lyp)
+        return sp.csr_matrix((nps, ([0] * len(lyp), indices)))
+
     def predict(self, X, fmt='sparse'):
         assert fmt in ('sparse', 'dict')
         s = []
-        f = self._predict_opt if hasattr(self, 'f_roots') else self._predict_classic
         for i in xrange(X.shape[0]):
-            mean = f(X[i])
+            mean = self._predict_opt(X[i])
+            if self.leaf_classifiers and self.blend < 1:
+                mean = self._add_leaf_probs(X[i], mean)
 
             if fmt == 'sparse':
                 s.append(mean)
@@ -240,7 +264,7 @@ class FastXML(object):
 
         return gen(batch_size)
 
-    def fit(self, X, y, weights=None):
+    def _build_roots(self, X, y, weights):
         assert isinstance(X, list) and isinstance(X[0], sp.csr_matrix), "Requires list of csr_matrix"
         if self.n_jobs > 1:
             f = fork_call(self.grow_tree)
@@ -278,8 +302,47 @@ class FastXML(object):
 
                 procs = _procs
 
-        self.roots = finished
+        return finished
+
+    def fit(self, X, y, weights=None):
+        
+        self.roots = self._build_roots(X, y, weights)
+        # Optimize for inference
         self.optimize()
+
+        if self.leaf_classifiers:
+            self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
+
+    def _l2norm(self, Xi):
+        return Xi / np.linalg.norm(Xi.data)
+
+    def _compute_leaf_probs(self, X, y):
+        dd = defaultdict(list)
+        ml = 0
+        for Xi, yis in izip(X, y):
+            Xin = self._l2norm(Xi)
+            for yi in yis:
+                dd[yi].append(Xin)
+                ml = max(yi, ml)
+
+        if self.verbose:
+            print "Computing means and radius for hard margin"
+
+        xmeans = []
+        xrs = []
+        for i in xrange(ml):
+            if self.verbose and i % 100 == 0:
+                print "Training leaf classifier: %s of %s" % (i, ml)
+
+            ux = sum(dd[i]) / len(dd[i])
+            xmeans.append(ux)
+            xrs.append(max(self._radius(ux, Xi) for Xi in dd[i]))
+
+        return sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
+
+    @staticmethod
+    def _radius(Xu, Xui):
+        return ((Xu - Xui).data ** 2).sum()
 
 class MetricNode(object):
     __slots__ = ('left', 'right')

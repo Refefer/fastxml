@@ -40,6 +40,15 @@ def build_inference_parser(parser):
         default=10,
         help="Maximum number of classes to predict"
     )
+    parser.add_argument("--dict", dest="dict", action="store_true",
+        help="Store predict as dict"
+    )
+    parser.add_argument("--gamma", type=float,
+        help="Overrides default gamma value for leaf classifiers"
+    )
+    parser.add_argument("--blend_factor", type=float,
+        help="Overrides default blend factor"
+    )
 
 def build_train_parser(parser):
     parser.add_argument("--trees", dest="trees", type=int,
@@ -90,6 +99,17 @@ def build_train_parser(parser):
         choices=('uniform', 'nnllog', 'propensity'), default='propensity',
         help="Number of threads to use.  Will use min(threads, trees)"
     )
+    parser.add_argument("--leaf-classifiers", dest="leaf_class", 
+        action="store_true",
+        help="Whether to use and compute leaf classifiers"
+    )
+    parser.add_argument("--gamma", type=int, default=30,
+        help="Gamma coefficient for hyper-sphere weighting"
+    )
+    parser.add_argument("--blend-factor", dest="blend_factor",
+        type=float, default=0.5,
+        help="blend * tree-probs + (1 - blend) * tail-classifiers"
+    )
     parser.add_argument("--verbose", action="store_true",
         help="Verbose"
     )
@@ -128,7 +148,7 @@ def quantize(fname, quantizer, labels_only=False, verbose=True):
                 print "%s docs encoded" % i
 
             data = json.loads(line)
-            if not data['tags']:
+            if not data['tags'] or not data['title']:
                 continue
 
             X = quantizer.quantize(data['title']) if not labels_only else None
@@ -183,6 +203,9 @@ def train(args):
         bias=args.bias,
         subsample=args.subsample,
         loss=args.loss,
+        leaf_classifiers=args.leaf_class,
+        blend=args.blend_factor,
+        gamma=args.gamma,
         n_jobs=args.threads,
         verbose=args.verbose
     )
@@ -210,6 +233,12 @@ def inference(args):
     with file(dataset.model) as f:
         clf = cPickle.load(f)
 
+    if args.blend_factor is not None:
+        clf.blend = args.blend_factor
+
+    if args.gamma is not None:
+        clf.gamma = args.gamma
+
     # Load reverse map
     with file(dataset.classes) as f:
         data = json.load(f)
@@ -218,7 +247,8 @@ def inference(args):
     for data, X, y in quantize(args.input_file, quantizer, verbose=False):
         y_hat = clf.predict(X, 'dict')[0]
         yi = islice(y_hat.iteritems(), args.max_predict)
-        data['predict'] = [[str(classes[k]), v] for k, v in yi]
+        nvals = [[unicode(classes[k]), v] for k, v in yi]
+        data['predict'] = dict(nvals) if args.dict else nvals
         print json.dumps(data)
 
 if __name__ == '__main__':
