@@ -215,7 +215,7 @@ class FastXML(object):
             lyp.append(1. / (1. + k))
 
         # Blend leaf and tree probabilities
-        nps = self.blend * ypi.data + (1 - self.blend) * np.array(lyp)
+        nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
         return sp.csr_matrix((nps, ([0] * len(lyp), indices)))
 
     def predict(self, X, fmt='sparse'):
@@ -277,6 +277,7 @@ class FastXML(object):
         else:
             assert weights.shape[0] == nl, "Weights need to be same as largest y class"
 
+        # Initialize cython splitter
         splitter = Splitter(y, weights, self.sparse_multiple)
 
         procs = []
@@ -330,15 +331,23 @@ class FastXML(object):
 
         xmeans = []
         xrs = []
+        #with multiprocessing.Pool(processes=self.n_jobs) as p:
         for i in xrange(ml):
             if self.verbose and i % 100 == 0:
                 print "Training leaf classifier: %s of %s" % (i, ml)
 
-            ux = sum(dd[i]) / len(dd[i])
+            _, ux, r = self._compute_leaf_probs(dd[i])
             xmeans.append(ux)
-            xrs.append(max(self._radius(ux, Xi) for Xi in dd[i]))
+            xrs.append(r)
 
         return sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
+
+    @staticmethod
+    def _compute_leaf_metrics(self, data):
+        i, Xs = data
+        ux = sum(Xs) / len(Xs)
+        radius = max(FastXML._radius(ux, Xi) for Xi in Xs)
+        return i, ux, radius
 
     @staticmethod
     def _radius(Xu, Xui):
