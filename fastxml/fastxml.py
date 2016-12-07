@@ -40,7 +40,7 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
-            gamma=30, blend=0.5, verbose=False, seed=2016):
+            gamma=30, blend=0.8, verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
