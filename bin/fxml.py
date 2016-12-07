@@ -24,7 +24,14 @@ def build_arg_parser():
 
     parser.add_argument("input_file", 
         help="Input file to use")
+
+    parser.add_argument("--standard-dataset", dest="standardDataset", action="store_true",
+        help="Input is standard dataset sparse format")
     
+    parser.add_argument("--verbose", action="store_true",
+        help="Verbose"
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     trainer = subparsers.add_parser('train', help="Set up for trainer")
@@ -51,6 +58,9 @@ def build_inference_parser(parser):
     )
 
 def build_train_parser(parser):
+    parser.add_argument("--no-remap-labels", dest="noRemap", action="store_true",
+        help="Whether to remap labels to an internal format.  Needed for string labels"
+    )
     parser.add_argument("--trees", dest="trees", type=int,
         default=50,
         help="Number of trees to use"
@@ -110,9 +120,6 @@ def build_train_parser(parser):
         type=float, default=0.5,
         help="blend * tree-probs + (1 - blend) * tail-classifiers"
     )
-    parser.add_argument("--verbose", action="store_true",
-        help="Verbose"
-    )
     return parser
 
 def sliding(it, window):
@@ -129,8 +136,13 @@ def sliding(it, window):
         pass
 
 class Quantizer(object):
-    def __init__(self):
+    def stream(self, fn):
+        raise NotImplementedError()
+
+class JsonQuantizer(Quantizer):
+    def __init__(self, verbose):
         self.fh = FeatureHasher(dtype='float32')
+        self.verbose = verbose
 
     def quantize(self, text):
         text = text.lower().replace(',', '')
@@ -141,19 +153,45 @@ class Quantizer(object):
         d = {f: 1.0 for f in chain(unigrams, bigrams, trigrams)}
         return self.fh.transform([d])
 
-def quantize(fname, quantizer, labels_only=False, verbose=True):
-    with file(fname) as f:
-        for i, line in enumerate(f):
-            if i % 10000 == 0 and verbose:
-                print "%s docs encoded" % i
+    def stream(self, fname):
+        with file(fname) as f:
+            for i, line in enumerate(f):
+                if self.verbose and i % 10000 == 0:
+                    print "%s docs encoded" % i
 
-            data = json.loads(line)
-            if not data['tags'] or not data['title']:
-                continue
+                data = json.loads(line)
+                if not data['tags'] or not data['title']:
+                    continue
 
-            X = quantizer.quantize(data['title']) if not labels_only else None
-            y = list(set(data['tags']))
-            yield data, X, y
+                X = self.quantize(data['title'])
+                y = list(set(data['tags']))
+                yield data, X, y
+
+class StandardDatasetQuantizer(Quantizer):
+    def __init__(self, verbose):
+        self.verbose = verbose
+
+    def quantize(self, line):
+        classes, sparse = line.strip().split(None, 1) 
+        y = map(int, classes.split(','))
+        c, d = [], [] 
+        for v in sparse.split():
+            loc, v = v.split(":")
+            c.append(int(loc))
+            d.append(float(v))
+
+        return (c, d), y
+
+    def stream(self, fn):
+        with file(fn) as f:
+            n_samples, n_feats, n_classes = map(int, f.readline().split())
+            for line in f:
+                if ',' not in line:
+                    continue
+
+                (c, d), y = self.quantize(line)
+                yield {"labels": y}, sp.csr_matrix((d, ([0] * len(d), c)), 
+                        shape=(1, n_feats), dtype='float32'), y
 
 class Dataset(object):
     def __init__(self, dataset):
@@ -167,17 +205,15 @@ class Dataset(object):
     def classes(self):
         return os.path.join(self.dataset, 'counts')
 
-def train(args):
-    # Quantize
-    quantizer = Quantizer()
+def train(args, quantizer):
     cnt = count()
     classes = defaultdict(int)
     X_train, y_train = [], []
-    for _, X, ys in quantize(args.input_file, quantizer):
+    for _, X, ys in quantizer.stream(args.input_file):
         nys = []
         for y in ys:
             if y not in classes:
-                classes[y] = next(cnt)
+                classes[y] = y if args.noRemap else next(cnt)
 
             nys.append(classes[y])
         
@@ -226,10 +262,9 @@ def train(args):
 
     sys.exit(0)
 
-def inference(args):
+def inference(args, quantizer):
     dataset = Dataset(args.model)
 
-    quantizer = Quantizer()
     with file(dataset.model) as f:
         clf = cPickle.load(f)
 
@@ -242,9 +277,9 @@ def inference(args):
     # Load reverse map
     with file(dataset.classes) as f:
         data = json.load(f)
-        classes = {v:k for k, v in data}
+        classes = {v: k for k, v in data}
 
-    for data, X, y in quantize(args.input_file, quantizer, verbose=False):
+    for data, X, y in quantizer.stream(args.input_file):
         y_hat = clf.predict(X, 'dict')[0]
         yi = islice(y_hat.iteritems(), args.max_predict)
         nvals = [[unicode(classes[k]), v] for k, v in yi]
@@ -253,7 +288,13 @@ def inference(args):
 
 if __name__ == '__main__':
     args = build_arg_parser().parse_args()
-    if args.command == 'train':
-        train(args)
+    # Quantize
+    if args.standardDataset:
+        quantizer = StandardDatasetQuantizer(args.verbose)
     else:
-        inference(args)
+        quantizer = JsonQuantizer(args.verbose)
+
+    if args.command == 'train':
+        train(args, quantizer)
+    else:
+        inference(args, quantizer)

@@ -7,7 +7,7 @@ import scipy.sparse as sp
 cimport cython
 cimport numpy as np
 
-from libc.math cimport log
+from libc.math cimport log, abs
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.unordered_map cimport unordered_map
 from libcpp cimport bool
@@ -460,7 +460,7 @@ def sparsify(np.ndarray[np.float64_t, ndim=2] dense, float eps=1e-6):
 
     for i in range(npv.shape[1]):
         n = npv[0,i]
-        if n > eps: 
+        if abs(n) > eps: 
             count += 1
             data.push_back(<float>n)
             col.push_back(i)
