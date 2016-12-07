@@ -332,18 +332,19 @@ class FastXML(object):
         xmeans = []
         xrs = []
         #with multiprocessing.Pool(processes=self.n_jobs) as p:
-        for i in xrange(ml):
+        #    it
+        for i in xrange(ml + 1):
             if self.verbose and i % 100 == 0:
                 print "Training leaf classifier: %s of %s" % (i, ml)
 
-            _, ux, r = self._compute_leaf_probs(dd[i])
+            _, ux, r = self._compute_leaf_metrics((i, dd[i]))
             xmeans.append(ux)
             xrs.append(r)
 
         return sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
 
     @staticmethod
-    def _compute_leaf_metrics(self, data):
+    def _compute_leaf_metrics(data):
         i, Xs = data
         ux = sum(Xs) / len(Xs)
         radius = max(FastXML._radius(ux, Xi) for Xi in Xs)
