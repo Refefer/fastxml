@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import print_function
+import math
 import sys
 import json
 import os
@@ -9,6 +11,7 @@ import cPickle
 
 import argparse
 
+import numpy as np
 from sklearn.feature_extraction import FeatureHasher
 import scipy.sparse as sp
 
@@ -55,6 +58,9 @@ def build_inference_parser(parser):
     )
     parser.add_argument("--blend_factor", type=float,
         help="Overrides default blend factor"
+    )
+    parser.add_argument("--score", action="store_true",
+        help="Scores results according to ndcg and precision"
     )
 
 def build_train_parser(parser):
@@ -140,9 +146,10 @@ class Quantizer(object):
         raise NotImplementedError()
 
 class JsonQuantizer(Quantizer):
-    def __init__(self, verbose):
+    def __init__(self, verbose, inference=False):
         self.fh = FeatureHasher(dtype='float32')
         self.verbose = verbose
+        self.inference = inference
 
     def quantize(self, text):
         text = text.lower().replace(',', '')
@@ -157,14 +164,18 @@ class JsonQuantizer(Quantizer):
         with file(fname) as f:
             for i, line in enumerate(f):
                 if self.verbose and i % 10000 == 0:
-                    print "%s docs encoded" % i
+                    print("%s docs encoded" % i)
 
                 data = json.loads(line)
-                if not data['tags'] or not data['title']:
+                if not data.get('title'):
                     continue
 
+                if not self.inference and not data.get('tags'):
+                    continue
+                    
                 X = self.quantize(data['title'])
-                y = list(set(data['tags']))
+
+                y = list(set(data.get('tags', [])))
                 yield data, X, y
 
 class StandardDatasetQuantizer(Quantizer):
@@ -185,9 +196,12 @@ class StandardDatasetQuantizer(Quantizer):
     def stream(self, fn):
         with file(fn) as f:
             n_samples, n_feats, n_classes = map(int, f.readline().split())
-            for line in f:
+            for i, line in enumerate(f):
                 if ',' not in line:
                     continue
+
+                if self.verbose and i % 10000 == 0:
+                    print("%s docs encoded" % i)
 
                 (c, d), y = self.quantize(line)
                 yield {"labels": y}, sp.csr_matrix((d, ([0] * len(d), c)), 
@@ -262,6 +276,28 @@ def train(args, quantizer):
 
     sys.exit(0)
 
+def dcg(scores, k=None):
+    if k is not None:
+        scores = scores[:k]
+
+    return sum(rl / math.log(i + 2) for i, rl in enumerate(scores))
+
+def ndcg(scores, k=None, eps=1e-6):
+    idcgs = dcg(sorted(scores, reverse=True), k)
+    if idcgs < eps:
+        return 0.0
+
+    dcgs = dcg(scores, k)
+
+    return dcgs / idcgs
+
+def print_ndcg(ndcgs):
+    ndcgT = zip(*ndcgs)
+    for i in xrange(3):
+        print('NDCG@{}: {}'.format(2 * i + 1, np.mean(ndcgT[i])), file=sys.stderr)
+
+    print(file=sys.stderr)
+
 def inference(args, quantizer):
     dataset = Dataset(args.model)
 
@@ -279,12 +315,28 @@ def inference(args, quantizer):
         data = json.load(f)
         classes = {v: k for k, v in data}
 
+    ndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
         y_hat = clf.predict(X, 'dict')[0]
         yi = islice(y_hat.iteritems(), args.max_predict)
         nvals = [[unicode(classes[k]), v] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals
-        print json.dumps(data)
+
+        if args.score:
+            ys = set(y)
+            scores = [int(classes[yii] in ys) for yii in y_hat.iterkeys()]
+            ndcgs.append([ndcg(scores, i) for i in (1, 3, 5)])
+            data['ndcg'] = ndcgs[-1]
+
+            if len(ndcgs) % 100 == 0:
+                print("Seen:", len(ndcgs), file=sys.stderr)
+                print_ndcg(ndcgs)
+
+        print(json.dumps(data))
+
+    if args.score:
+        print_ndcg(ndcgs)
+
 
 if __name__ == '__main__':
     args = build_arg_parser().parse_args()

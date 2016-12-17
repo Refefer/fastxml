@@ -7,7 +7,7 @@ import scipy.sparse as sp
 cimport cython
 cimport numpy as np
 
-from libc.math cimport log, abs
+from libc.math cimport log, abs, exp, pow
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.unordered_map cimport unordered_map
 from libcpp cimport bool
@@ -354,6 +354,59 @@ cdef class Leaf(Node):
         self.is_leaf = True
         self.idx = idx
 
+cdef float dot(const SR& x, const SR& w, const float bias):
+    cdef int xidx = 0, widx = 0, xi, wi
+    cdef int x_s = x.size(), w_s = w.size()
+    cdef float tally = 0.0
+
+    while xidx < x_s and widx < w_s:
+        xi = x[xidx].first 
+        wi = w[widx].first
+        if xi < wi:
+            xidx += 1
+        elif xi > wi:
+            widx += 1
+        else:
+            tally += x[xidx].second * w[widx].second
+            xidx += 1
+            widx += 1
+
+    return tally + bias
+
+cdef SR convert_to_sr(const int [:] indices, const float [:] data, const int size):
+    cdef SR sparse
+    cdef pair[int,float] p
+    cdef int i
+
+    for i in range(size):
+        p = pair[int,float]()
+        p.first = indices[i]
+        p.second = data[i]
+        sparse.push_back(p)
+
+    return sparse
+
+cdef float sparse_dot(const int [:] i1, const float [:] d1, 
+                      const int [:] i2, const float [:] d2, 
+                      const int s1, const int s2):
+
+    cdef int xidx = 0, widx = 0, xi, wi
+    cdef float tally = 0.0
+
+    while xidx < s1 and widx < s2:
+        xi = i1[xidx]
+        wi = i2[widx]
+        if xi < wi:
+            xidx += 1
+        elif xi > wi:
+            widx += 1
+        else:
+            tally += d1[xidx] * d2[widx]
+            xidx += 1
+            widx += 1
+
+    return tally
+
 cdef class PTree:
     cdef CSR weights
     cdef vector[float] bias
@@ -363,19 +416,6 @@ cdef class PTree:
     def __init__(self, object tree):
         self.payloads = []
         self.root = self.build_tree(tree)
-
-    cdef SR convert_to_dense(self, const int [:] indices, const float [:] data, const int size):
-        cdef SR sparse
-        cdef pair[int,float] p
-        cdef int i
-
-        for i in range(size):
-            p = pair[int,float]()
-            p.first = indices[i]
-            p.second = data[i]
-            sparse.push_back(p)
-
-        return sparse
 
     cdef Node build_tree(self, object tree):
         cdef int idx
@@ -390,7 +430,7 @@ cdef class PTree:
             # Convert sparse weights to SR
             indices = tree.w.indices
             data = tree.w.data
-            self.weights.push_back(self.convert_to_dense(indices, data, data.shape[0]))
+            self.weights.push_back(convert_to_sr(indices, data, data.shape[0]))
 
             # Convert bias to float
             bias = tree.b[0]
@@ -406,27 +446,8 @@ cdef class PTree:
             self.payloads.append(tree.probs)
             return Leaf(idx)
     
-    cdef float dot(self, const SR& x, const SR& w, const float bias):
-        cdef int xidx = 0, widx = 0, xi, wi
-        cdef int x_s = x.size(), w_s = w.size()
-        cdef float tally = 0.0
-
-        while xidx < x_s and widx < w_s:
-            xi = x[xidx].first 
-            wi = w[widx].first
-            if xi < wi:
-                xidx += 1
-            elif xi > wi:
-                widx += 1
-            else:
-                tally += x[xidx].second * w[widx].second
-                xidx += 1
-                widx += 1
-
-        return tally + bias
-
     def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
-        cdef SR x = self.convert_to_dense(indices, data, data.shape[0])
+        cdef SR x = convert_to_sr(indices, data, data.shape[0])
         cdef int idx = self.predict_sr(x)
         return self.payloads[idx]
 
@@ -440,7 +461,7 @@ cdef class PTree:
             inode = <INode>node
             w = self.weights[node.idx]
             b = self.bias[node.idx]
-            d = self.dot(x, w, b)
+            d = dot(x, w, b)
             if d < 0:
                 node = inode.left
             else:
@@ -484,3 +505,76 @@ def sparsify(np.ndarray[np.float64_t, ndim=2] dense, float eps=1e-6):
     csr.data = d
 
     return csr
+
+cdef double radius2(const int [:] xi, const double [:] xd, 
+                    const int [:] ui, const double [:] ud, 
+                    const int s1, const int s2):
+    """
+    Computes the Sum((Xi - Ux) ** 2)
+    """
+
+    cdef int xidx = 0, uidx = 0
+    cdef int xcol, ucol
+    cdef double tally = 0.0, diff
+
+    while xidx < s1 and uidx < s2:
+        xcol = xi[xidx]
+        ucol = ui[uidx]
+        if xcol < ucol:
+            tally += pow(xd[xidx], 2) 
+            xidx += 1
+        elif xcol > ucol:
+            tally += pow(ud[uidx], 2)
+            uidx += 1
+        else:
+            diff = (xd[xidx] - ud[uidx])
+            tally += pow(diff, 2)
+            xidx += 1
+            uidx += 1
+
+    # Get the remainder
+    while xidx < s1 or uidx < s2:
+        if xidx < s1:
+            tally += xd[xidx] * xd[xidx]
+            xidx += 1
+        else:
+            tally += ud[uidx] * ud[uidx]
+            uidx += 1
+
+    return tally
+
+def radius(np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, 
+           np.ndarray[np.double_t] uid, np.ndarray[np.int32_t] uii):
+
+    return radius2(Xii, Xid, uii, uid, Xii.shape[0], uii.shape[0])
+
+def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, list sparse, list radius):
+    cdef int i
+    cdef float r, ur, rad
+    cdef object m 
+    cdef vector[float] ret
+    for i in range(len(sparse)):
+        ur = radius[i]
+        m = sparse[i]
+        rad = radius2(Xii, Xid, m.indices, m.data, Xii.shape[0], m.indices.shape[0])
+        k = exp(gamma  * (rad - ur)) 
+        ret.push_back(1. / (1. + k))
+
+    return ret
+
+def sparse_mean(list xs, np.ndarray[np.double_t] ret):
+    cdef int i, k
+    cdef int [:] indices
+    cdef double [:] data
+    cdef double [:] r = ret
+    for i in range(len(xs)):
+        x = xs[i]
+        indices = x.indices
+        data = x.data
+        for k in xrange(data.shape[0]):
+            r[indices[k]] += data[k]
+
+    cdef int size = len(xs)
+    for i in range(r.shape[0]):
+        r[i] /= size
+

@@ -1,6 +1,7 @@
 import multiprocessing
 import time
 from itertools import islice, repeat, izip
+from contextlib import closing
 from collections import Counter, OrderedDict, defaultdict
 
 import numpy as np
@@ -9,7 +10,7 @@ import scipy.sparse as sp
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import Splitter, PTree, sparsify
+from .splitter import Splitter, PTree, sparsify, compute_leafs, sparse_mean, radius
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -40,7 +41,7 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
-            gamma=30, blend=0.8, verbose=False, seed=2016):
+            gamma=30, blend=0.8, leaf_eps=1e-5, verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -62,6 +63,7 @@ class FastXML(object):
         self.leaf_classifiers = leaf_classifiers
         self.gamma = gamma
         self.blend = blend
+        self.leaf_eps = leaf_eps
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -201,18 +203,15 @@ class FastXML(object):
         self.f_roots = [PTree(r) for r in self.roots]
 
     def _add_leaf_probs(self, X, ypi):
-        Xn = self._l2norm(X)
+        Xn = l2norm(X)
         indices = []
-        lyp = []
+        uxs, xrs = [], []
         for yi in ypi.indices:
-            ux = self.uxs_[yi]
-            xr = self.xr_[yi]
-
-            # distance
-            hl = ((Xn - ux).data ** 2).sum()
-            k = np.exp(self.gamma  * (hl - xr)) 
+            uxs.append(self.uxs_[yi])
+            xrs.append(self.xr_[yi])
             indices.append(yi)
-            lyp.append(1. / (1. + k))
+
+        lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, uxs, xrs)
 
         # Blend leaf and tree probabilities
         nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
@@ -314,14 +313,11 @@ class FastXML(object):
         if self.leaf_classifiers:
             self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
 
-    def _l2norm(self, Xi):
-        return Xi / np.linalg.norm(Xi.data)
-
     def _compute_leaf_probs(self, X, y):
         dd = defaultdict(list)
         ml = 0
         for Xi, yis in izip(X, y):
-            Xin = self._l2norm(Xi)
+            Xin = l2norm(Xi)
             for yi in yis:
                 dd[yi].append(Xin)
                 ml = max(yi, ml)
@@ -331,28 +327,33 @@ class FastXML(object):
 
         xmeans = []
         xrs = []
-        #with multiprocessing.Pool(processes=self.n_jobs) as p:
-        #    it
-        for i in xrange(ml + 1):
-            if self.verbose and i % 100 == 0:
-                print "Training leaf classifier: %s of %s" % (i, ml)
+        with closing(multiprocessing.Pool(processes=self.n_jobs)) as p:
+            print "Starting..."
+            it = ((i, dd[i], self.leaf_eps) for i in xrange(ml + 1))
+            for k, ux, r in p.imap(compute_leaf_metrics, it, 100):
+                if self.verbose and k % 100 == 0:
+                    print "Training leaf classifier: %s of %s" % (k, ml)
 
-            _, ux, r = self._compute_leaf_metrics((i, dd[i]))
-            xmeans.append(ux)
-            xrs.append(r)
+                xmeans.append(ux)
+                xrs.append(r)
 
         return sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
 
-    @staticmethod
-    def _compute_leaf_metrics(data):
-        i, Xs = data
-        ux = sum(Xs) / len(Xs)
-        radius = max(FastXML._radius(ux, Xi) for Xi in Xs)
-        return i, ux, radius
+def l2norm(Xi):
+    return Xi / np.linalg.norm(Xi.data)
 
-    @staticmethod
-    def _radius(Xu, Xui):
-        return ((Xu - Xui).data ** 2).sum()
+def compute_leaf_metrics(data):
+    i, Xs, eps = data
+    if len(Xs) > 100:
+        v = np.zeros(Xs[0].shape[1], dtype='float64')
+        sparse_mean(Xs, v)
+        ux = sparsify(v.reshape((1, -1)), eps=eps).astype('float64')
+    else:
+        ux = sum(Xs) / len(Xs)
+
+    ux = l2norm(ux)
+    rad = max(radius(ux.data, ux.indices, Xi.data, Xi.indices) for Xi in Xs)
+    return i, ux, rad
 
 class MetricNode(object):
     __slots__ = ('left', 'right')
