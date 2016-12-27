@@ -2,7 +2,7 @@ import multiprocessing
 import time
 from itertools import islice, repeat, izip
 from contextlib import closing
-from collections import Counter, OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict, deque
 
 import numpy as np
 import scipy.sparse as sp
@@ -10,7 +10,7 @@ import scipy.sparse as sp
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import Splitter, PTree, sparsify, compute_leafs, sparse_mean, radius
+from .splitter import Splitter, PTree, sparsify, compute_leafs, sparse_mean, radius, ITree
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -35,6 +35,28 @@ class CLF(object):
 def stack(X):
     stacker = np.vstack if isinstance(X[0], np.ndarray) else sp.vstack
     return stacker(X)
+
+class Tree(object):
+    def __init__(self, rootIdx, W, b, tree, probs):
+        self.rootIdx = rootIdx
+        self.W = W
+        self.b = b
+        self.tree = tree
+        self.probs = probs
+        self._predictor = None
+
+    @property
+    def predictor(self):
+        if self._predictor is None:
+            self._predictor = ITree(self.rootIdx, self.W, self.b, self.tree, self.probs)
+
+        return self._predictor
+
+    def __reduce__(self):
+        return (Tree, (self.rootIdx, self.W, self.b, self.tree, self.probs), {})
+
+    def __setstate__(self, d):
+        pass
 
 class FastXML(object):
 
@@ -129,15 +151,10 @@ class FastXML(object):
 
     def __reduce__(self):
         d = self.__dict__.copy()
-        if 'f_roots' in d:
-            del d['f_roots']
-
         return (FastXML, (), d)
 
     def __setstate__(self, d):
         self.__dict__.update(d)
-        if 'roots' in d:
-            self.optimize()
 
     def resplit_data(self, X, idxs, clf, classes):
         X_train = self.build_X(X, idxs)
@@ -159,6 +176,10 @@ class FastXML(object):
             clf, clf_fast = self.train_clf(X, [l_idx, r_idx], rs, tries)
 
         return l_idx, r_idx, (clf, clf_fast)
+
+    def grow_root(self, X, y, idxs, rs, splitter):
+        node = self.grow_tree(X, y, idxs, rs, splitter)
+        return self.compact(node)
 
     def grow_tree(self, X, y, idxs, rs, splitter):
 
@@ -194,13 +215,10 @@ class FastXML(object):
 
     def _predict_opt(self, X):
         probs = []
-        for tree in self.f_roots:
-            probs.append(tree.predict(X.data, X.indices))
+        for tree in self.roots:
+            probs.append(tree.predictor.predict(X.data, X.indices))
 
         return sum(probs) / len(probs)
-
-    def optimize(self):
-        self.f_roots = [PTree(r) for r in self.roots]
 
     def _add_leaf_probs(self, X, ypi):
         Xn = l2norm(X)
@@ -266,9 +284,9 @@ class FastXML(object):
     def _build_roots(self, X, y, weights):
         assert isinstance(X, list) and isinstance(X[0], sp.csr_matrix), "Requires list of csr_matrix"
         if self.n_jobs > 1:
-            f = fork_call(self.grow_tree)
+            f = fork_call(self.grow_root)
         else:
-            f = faux_fork_call(self.grow_tree)
+            f = faux_fork_call(self.grow_root)
 
         nl = max(yi for ys in y for yi in ys) + 1
         if weights is None:
@@ -303,13 +321,45 @@ class FastXML(object):
                 procs = _procs
 
         return finished
+    
+    def compact(self, root):
+        #CLS
+        Ws = []
+        bs = []
+
+        # Tree: index, left, right, isLeaf
+        tree = []
+
+        # Payload
+        probs = []
+
+        def f(node):
+            if node.is_leaf:
+                treeIdx = len(probs)
+                probs.append(node.probs)
+                tree.append([treeIdx, 0, 0, 1])
+            else:
+                leftIndex = f(node.left)
+                rightIndex = f(node.right)
+
+                clfIdx = len(Ws)
+                Ws.append(node.w)
+                bs.append(node.b[0])
+                tree.append([clfIdx, leftIndex, rightIndex, 0])
+
+            curIdx = len(tree) - 1
+            return curIdx
+
+        rootIdx = f(root)
+
+        return Tree(rootIdx, sp.vstack(Ws), 
+                np.array(bs, dtype='float32'), 
+                np.array(tree, dtype='uint32'), 
+                probs)
 
     def fit(self, X, y, weights=None):
         
         self.roots = self._build_roots(X, y, weights)
-        # Optimize for inference
-        self.optimize()
-
         if self.leaf_classifiers:
             self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
 

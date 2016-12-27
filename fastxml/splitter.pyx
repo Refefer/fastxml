@@ -335,25 +335,6 @@ cdef class Splitter:
         empty.second = newRight
         return empty
  
-cdef class Node:
-    cdef int idx
-    cdef bool is_leaf
-
-cdef class INode(Node):
-    cdef Node left
-    cdef Node right
-
-    def __init__(self, int idx, Node left, Node right):
-        self.is_leaf = False
-        self.idx = idx
-        self.left = left
-        self.right = right
-
-cdef class Leaf(Node):
-    def __init__(self, const int idx):
-        self.is_leaf = True
-        self.idx = idx
-
 cdef float dot(const SR& x, const SR& w, const float bias):
     cdef int xidx = 0, widx = 0, xi, wi
     cdef int x_s = x.size(), w_s = w.size()
@@ -386,88 +367,101 @@ cdef SR convert_to_sr(const int [:] indices, const float [:] data, const int siz
 
     return sparse
 
-cdef float sparse_dot(const int [:] i1, const float [:] d1, 
-                      const int [:] i2, const float [:] d2, 
-                      const int s1, const int s2):
+cdef float sparse_dot(const int [:]& i1, const float [:]& d1, 
+                      const int [:]& i2, const float [:]& d2, 
+                      const int s1, const int s2,
+                      const int o1, const int o2):
 
-    cdef int xidx = 0, widx = 0, xi, wi
+    cdef int xidx = 0, widx = 0, xi, wi, xoidx, woidx
     cdef float tally = 0.0
 
     while xidx < s1 and widx < s2:
-        xi = i1[xidx]
-        wi = i2[widx]
+        xoidx = o1 + xidx
+        woidx = o2 + widx
+        xi = i1[xoidx]
+        wi = i2[woidx]
         if xi < wi:
             xidx += 1
         elif xi > wi:
             widx += 1
         else:
-            tally += d1[xidx] * d2[widx]
+            tally += d1[xoidx] * d2[woidx]
             xidx += 1
             widx += 1
 
     return tally
 
-cdef class PTree:
-    cdef CSR weights
-    cdef vector[float] bias
-    cdef Node root
+cdef class ITree:
+    cdef int rootIdx
+    cdef unsigned int[:, :] tree
     cdef list payloads
 
-    def __init__(self, object tree):
-        self.payloads = []
-        self.root = self.build_tree(tree)
+    cdef int [:] w_indptr
+    cdef int [:] w_indices
+    cdef float [:] w_data
 
-    cdef Node build_tree(self, object tree):
-        cdef int idx
-        cdef float bias
-        cdef Node left, right, node
-        cdef np.ndarray[np.float32_t] data
-        cdef np.ndarray[np.int32_t] indices
+    cdef float[:] bias
 
-        if not tree.is_leaf:
-            idx = self.weights.size()
+    def __init__(self, int rootIdx, 
+                       W,
+                       np.ndarray[np.float32_t] bias,
+                       np.ndarray[np.uint32_t, ndim=2, mode='c'] tree, 
+                       list payloads):
 
-            # Convert sparse weights to SR
-            indices = tree.w.indices
-            data = tree.w.data
-            self.weights.push_back(convert_to_sr(indices, data, data.shape[0]))
+        self.rootIdx = rootIdx
+        self.payloads = payloads
+        self.tree = tree
+        self.w_indptr = W.indptr
+        self.w_indices = W.indices
+        self.w_data = W.data
+        self.bias = bias
 
-            # Convert bias to float
-            bias = tree.b[0]
-            self.bias.push_back(bias)
-
-            # Build subtree
-            left  = self.build_tree(tree.left)
-            right = self.build_tree(tree.right)
-            
-            return INode(idx, left, right)
-        else:
-            idx = len(self.payloads)
-            self.payloads.append(tree.probs)
-            return Leaf(idx)
-    
     def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
         cdef SR x = convert_to_sr(indices, data, data.shape[0])
-        cdef int idx = self.predict_sr(x)
+        cdef int idx = self.predict_sr(indices, data)
         return self.payloads[idx]
 
-    cdef int predict_sr(self, SR& x):
-        cdef SR w
-        cdef float b, d
-        cdef INode inode
+    cdef inline unsigned int index(self, unsigned int[:]& node):
+        return node[0]
 
-        cdef Node node = self.root
-        while not node.is_leaf:
-            inode = <INode>node
-            w = self.weights[node.idx]
-            b = self.bias[node.idx]
-            d = dot(x, w, b)
+    cdef inline unsigned int left(self, unsigned int[:]& node):
+        return node[1]
+
+    cdef inline unsigned int right(self, unsigned int[:]& node):
+        return node[2]
+
+    cdef inline bool is_leaf(self, unsigned int[:]& node):
+        return node[3] == 1
+
+    cdef int predict_sr(self, int [:]& indices, float [:]& data):
+        cdef unsigned int index, nIndex
+        cdef int s1, s2, o1, o2
+        cdef unsigned int [:] node
+        cdef float d
+
+        cdef unsigned int [:,:] tree = self.tree
+        cdef int [:] w_indptr = self.w_indptr
+        cdef int [:] w_indices = self.w_indices
+        cdef float [:] w_data = self.w_data
+        cdef float [:] bias = self.bias
+
+        o1 = 0
+        s1 = data.shape[0]
+        node = tree[self.rootIdx]
+        while not self.is_leaf(node):
+            index = self.index(node)
+            o2 = w_indptr[index]
+            s2 = w_indptr[index + 1] - o2
+            d = sparse_dot(indices, data, w_indices, w_data, s1, s2, o1, o2)
+            d += bias[index]
             if d < 0:
-                node = inode.left
+                nIndex = self.left(node)
             else:
-                node = inode.right
+                nIndex = self.right(node)
 
-        return node.idx
+            node = tree[nIndex]
+
+        return self.index(node)
 
 def sparsify(np.ndarray[np.float64_t, ndim=2] dense, float eps=1e-6):
     """
