@@ -10,7 +10,7 @@ import scipy.sparse as sp
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
 
-from .splitter import Splitter, PTree, sparsify, compute_leafs, sparse_mean, radius, ITree
+from .splitter import Splitter, sparsify, compute_leafs, sparse_mean, radius, ITree
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
