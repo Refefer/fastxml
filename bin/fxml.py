@@ -4,7 +4,7 @@ import math
 import sys
 import json
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 import multiprocessing
 from itertools import islice, chain, count
 import cPickle
@@ -126,6 +126,10 @@ def build_train_parser(parser):
         type=float, default=0.5,
         help="blend * tree-probs + (1 - blend) * tail-classifiers"
     )
+    parser.add_argument("--min-label-count", dest="mlc",
+        type=int, default=5,
+        help="Filter out labels with count < min-label-count"
+    )
     return parser
 
 def sliding(it, window):
@@ -146,10 +150,11 @@ class Quantizer(object):
         raise NotImplementedError()
 
 class JsonQuantizer(Quantizer):
-    def __init__(self, verbose, inference=False):
+    def __init__(self, verbose, min_label_count=1, inference=False):
         self.fh = FeatureHasher(dtype='float32')
         self.verbose = verbose
         self.inference = inference
+        self.min_label_count = min_label_count
 
     def quantize(self, text):
         text = text.lower().replace(',', '')
@@ -160,22 +165,38 @@ class JsonQuantizer(Quantizer):
         d = {f: 1.0 for f in chain(unigrams, bigrams, trigrams)}
         return self.fh.transform([d])
 
-    def stream(self, fname):
+    def yieldJson(self, fname):
         with file(fname) as f:
             for i, line in enumerate(f):
                 if self.verbose and i % 10000 == 0:
                     print("%s docs encoded" % i)
 
-                data = json.loads(line)
-                if not data.get('title'):
-                    continue
+                yield json.loads(line)
 
-                if not self.inference and not data.get('tags'):
-                    continue
-                    
-                X = self.quantize(data['title'])
+    def count_labels(self, fname):
+        c = Counter()
+        for data in self.yieldJson(fname):
+            c.update(data['tags'])
 
-                y = list(set(data.get('tags', [])))
+        return (lambda t: c[t] >= self.min_label_count)
+
+    def stream(self, fname):
+        if self.min_label_count > 1:
+            f = self.count_labels(fname)
+        else:
+            f = lambda x: True
+
+        for data in self.yieldJson(fname):
+            if not data.get('title'):
+                continue
+
+            if not self.inference and not data.get('tags'):
+                continue
+                
+            X = self.quantize(data['title'])
+
+            y = [yi for yi in set(data['tags']) if f(yi)]
+            if y:
                 yield data, X, y
 
 class StandardDatasetQuantizer(Quantizer):
@@ -221,7 +242,7 @@ class Dataset(object):
 
 def train(args, quantizer):
     cnt = count()
-    classes = defaultdict(int)
+    classes = {}
     X_train, y_train = [], []
     for _, X, ys in quantizer.stream(args.input_file):
         nys = []
@@ -344,7 +365,8 @@ if __name__ == '__main__':
     if args.standardDataset:
         quantizer = StandardDatasetQuantizer(args.verbose)
     else:
-        quantizer = JsonQuantizer(args.verbose)
+        mlc = 1 if args.command == 'inference' else args.mlc
+        quantizer = JsonQuantizer(args.verbose, mlc)
 
     if args.command == 'train':
         train(args, quantizer)
