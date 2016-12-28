@@ -378,7 +378,6 @@ class FastXML(object):
         xmeans = []
         xrs = []
         with closing(multiprocessing.Pool(processes=self.n_jobs)) as p:
-            print "Starting..."
             it = ((i, dd[i], self.leaf_eps) for i in xrange(ml + 1))
             for k, ux, r in p.imap(compute_leaf_metrics, it, 100):
                 if self.verbose and k % 100 == 0:
