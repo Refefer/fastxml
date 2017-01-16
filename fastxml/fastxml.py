@@ -179,7 +179,7 @@ class FastXML(object):
 
     def grow_root(self, X, y, idxs, rs, splitter):
         node = self.grow_tree(X, y, idxs, rs, splitter)
-        return self.compact(node)
+        return self.compact(node, X[0].shape[1])
 
     def grow_tree(self, X, y, idxs, rs, splitter):
 
@@ -322,7 +322,7 @@ class FastXML(object):
 
         return finished
     
-    def compact(self, root):
+    def compact(self, root, dims):
         #CLS
         Ws = []
         bs = []
@@ -352,7 +352,12 @@ class FastXML(object):
 
         rootIdx = f(root)
 
-        return Tree(rootIdx, sp.vstack(Ws), 
+        if Ws:
+            W_stack = sp.vstack(Ws)
+        else:
+            W_stack = sp.csr_matrix(([], ([], [])), shape=(0, dims)).astype('float32')
+
+        return Tree(rootIdx, W_stack, 
                 np.array(bs, dtype='float32'), 
                 np.array(tree, dtype='uint32'), 
                 probs)
