@@ -115,6 +115,13 @@ def build_train_parser(parser):
         choices=('uniform', 'nnllog', 'propensity'), default='propensity',
         help="Number of threads to use.  Will use min(threads, trees)"
     )
+    parser.add_argument("--optimization", dest="optimization", 
+        choices=('fastxml', 'dsimec'), default='fastxml',
+        help="optimization strategy to use for linear classifier"
+    )
+    parser.add_argument("--eps", dest="eps", 
+        help="Sparsity epsilon.  Weights lower than eps will suppress to zero"
+    )
     parser.add_argument("--leaf-classifiers", dest="leaf_class", 
         action="store_true",
         help="Whether to use and compute leaf classifiers"
@@ -278,6 +285,8 @@ def train(args, quantizer):
         blend=args.blend_factor,
         gamma=args.gamma,
         n_jobs=args.threads,
+        optimization=args.optimization,
+        eps=args.eps,
         verbose=args.verbose
     )
 

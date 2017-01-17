@@ -66,7 +66,7 @@ class FastXML(object):
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, n_updates=100, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
             gamma=30, blend=0.8, leaf_eps=1e-5, optimization="fastxml", 
-            verbose=False, seed=2016):
+            eps=None, verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -93,6 +93,11 @@ class FastXML(object):
         self.leaf_eps = leaf_eps
         assert optimization in ('fastxml', 'dsimec')
         self.optimization = optimization
+        if eps is None:
+            eps = 1e-6 if optimization == 'fastxml' else 1e-2
+
+        self.eps = eps
+
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -163,6 +168,7 @@ class FastXML(object):
             penalty = 'l1'
         else:
             penalty = 'l2'
+
         clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
                 alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                 random_state=rs)
@@ -172,8 +178,7 @@ class FastXML(object):
         clf.fit(X_train, y_train)
 
         # Halves the memory requirement
-        eps = 1e-6 if self.optimization == 'fastxml' else 1e-2
-        clf.coef_ = sparsify(clf.coef_, eps)
+        clf.coef_ = sparsify(clf.coef_, self.eps)
         if self.bias:
             clf.intercept_ = clf.intercept_.astype('float32')
 
