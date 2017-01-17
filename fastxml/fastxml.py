@@ -252,11 +252,9 @@ class FastXML(object):
 
     def _add_leaf_probs(self, X, ypi):
         Xn = l2norm(X)
-        indices = ypi.indices.tolist()
-        uxs = self.uxs_[indices]
-        xrs = self.xr_[indices]
+        indices = ypi.indices
 
-        lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, uxs, xrs)
+        lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, indices, self.uxs_, self.xr_)
 
         # Blend leaf and tree probabilities
         def f():
