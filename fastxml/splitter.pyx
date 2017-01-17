@@ -542,15 +542,25 @@ def radius(np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii,
 
     return radius2(Xii, Xid, uii, uid, Xii.shape[0], uii.shape[0])
 
-def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, list sparse, list radius):
-    cdef int i
+def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, 
+        object sparse, np.ndarray[np.float32_t] radius):
+    cdef int i, start, end
     cdef float r, ur, rad
     cdef object m 
     cdef vector[float] ret
-    for i in range(len(sparse)):
+
+    cdef int [:] m_indices
+    cdef double [:] m_data
+
+    for i in range(sparse.shape[0]):
         ur = radius[i]
-        m = sparse[i]
-        rad = radius2(Xii, Xid, m.indices, m.data, Xii.shape[0], m.indices.shape[0])
+        start = sparse.indptr[i]
+        end = sparse.indptr[i+1]
+
+        m_indices = sparse.indices[start:end]
+        m_data    = sparse.data[start:end]
+
+        rad = radius2(Xii, Xid, m_indices, m_data, Xii.shape[0], m_indices.shape[0])
         k = exp(gamma  * (rad - ur)) 
         ret.push_back(1. / (1. + k))
 

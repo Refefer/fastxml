@@ -65,7 +65,8 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, n_updates=100, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
-            gamma=30, blend=0.8, leaf_eps=1e-5, verbose=False, seed=2016):
+            gamma=30, blend=0.8, leaf_eps=1e-5, optimization="fastxml", 
+            verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -90,6 +91,8 @@ class FastXML(object):
         self.gamma = gamma
         self.blend = blend
         self.leaf_eps = leaf_eps
+        assert optimization in ('fastxml', 'dsimec')
+        self.optimization = optimization
         self.roots = []
 
     def split_node(self, idxs, splitter, rs):
@@ -156,7 +159,11 @@ class FastXML(object):
         if self.verbose and len(idxss) > 1000:
             print "Epochs:", n_epochs
 
-        clf = SGDClassifier(loss=self.loss, penalty='l1', n_iter=n_epochs, 
+        if self.optimization == 'fastxml':
+            penalty = 'l1'
+        else:
+            penalty = 'l2'
+        clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
                 alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                 random_state=rs)
 
@@ -165,7 +172,8 @@ class FastXML(object):
         clf.fit(X_train, y_train)
 
         # Halves the memory requirement
-        clf.coef_ = sparsify(clf.coef_)
+        eps = 1e-6 if self.optimization == 'fastxml' else 1e-2
+        clf.coef_ = sparsify(clf.coef_, eps)
         if self.bias:
             clf.intercept_ = clf.intercept_.astype('float32')
 
@@ -244,18 +252,17 @@ class FastXML(object):
 
     def _add_leaf_probs(self, X, ypi):
         Xn = l2norm(X)
-        indices = []
-        uxs, xrs = [], []
-        for yi in ypi.indices:
-            uxs.append(self.uxs_[yi])
-            xrs.append(self.xr_[yi])
-            indices.append(yi)
+        indices = ypi.indices.tolist()
+        uxs = self.uxs_[indices]
+        xrs = self.xr_[indices]
 
         lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, uxs, xrs)
 
         # Blend leaf and tree probabilities
-        nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
-        return sp.csr_matrix((nps, ([0] * len(lyp), indices)))
+        def f():
+            nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
+            return nps
+        return sp.csr_matrix((f(), ([0] * len(lyp), indices)))
 
     def predict(self, X, fmt='sparse'):
         assert fmt in ('sparse', 'dict')
@@ -406,6 +413,9 @@ class FastXML(object):
                 if self.verbose and k % 100 == 0:
                     print "Training leaf classifier: %s of %s" % (k, ml)
 
+                if ux is None:
+                    ux = sp.csr_matrix((1, X[0].shape[1])).astype('float64')
+
                 xmeans.append(ux)
                 xrs.append(r)
 
@@ -420,8 +430,12 @@ def compute_leaf_metrics(data):
         v = np.zeros(Xs[0].shape[1], dtype='float64')
         sparse_mean(Xs, v)
         ux = sparsify(v.reshape((1, -1)), eps=eps).astype('float64')
-    else:
+
+    elif len(Xs) > 1:
         ux = sum(Xs) / len(Xs)
+
+    else:
+        return i, None, 0.0
 
     ux = l2norm(ux)
     rad = max(radius(ux.data, ux.indices, Xi.data, Xi.indices) for Xi in Xs)
