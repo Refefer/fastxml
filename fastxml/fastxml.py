@@ -1,5 +1,6 @@
 import multiprocessing
 import time
+from math import ceil
 from itertools import islice, repeat, izip
 from contextlib import closing
 from collections import Counter, OrderedDict, defaultdict, deque
@@ -9,6 +10,7 @@ import scipy.sparse as sp
 
 import scipy.sparse as sp
 from sklearn.linear_model import SGDClassifier
+from sklearn.utils import shuffle
 
 from .splitter import Splitter, sparsify, compute_leafs, sparse_mean, radius, ITree
 from .proc import faux_fork_call, fork_call
@@ -61,7 +63,7 @@ class Tree(object):
 class FastXML(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
-            re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, bias=True, 
+            re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, n_updates=100, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
             gamma=30, blend=0.8, leaf_eps=1e-5, verbose=False, seed=2016):
 
@@ -76,7 +78,9 @@ class FastXML(object):
             seed = np.randint(0, np.iinfo(np.int32).max)
 
         self.seed = seed
+        assert isinstance(n_epochs, int) or n_epochs == 'auto'
         self.n_epochs = n_epochs
+        self.n_updates = n_updates
         self.verbose = verbose
         self.bias = bias
         self.subsample = subsample
@@ -121,24 +125,42 @@ class FastXML(object):
         X_train.data    = np.concatenate(data)
         return X_train
 
-    def build_XY(self, X, idxss):
+    def build_XY(self, X, idxss, rs):
+        """
+        Faster sparse building
+        """
         y_train = []
-
         idxes = []
         for i, idxs in enumerate(idxss):
             idxes.extend(idxs)
             y_train.extend([i] * len(idxs))
 
+        # Shuffle the flattened data
+        idxes, y_train = shuffle(idxes, y_train, random_state=rs)
+
         X_train = self.build_X(X, idxes)
         return X_train, y_train
 
+    def compute_epochs(self, N):
+        if isinstance(self.n_epochs, int):
+            return self.n_epochs
 
-    def train_clf(self, X, idxss, rs, tries=0):
-        clf = SGDClassifier(loss=self.loss, penalty='l1', n_iter=self.n_epochs + tries, 
+        # Rules of Thumb state that SGD needs ~1mm updates to converge
+        # That would take _forever_, so we set it 100 by default
+        n_epochs = int(ceil(self.n_updates / N))
+        assert n_epochs > 0
+        return n_epochs
+
+    def train_clf(self, X, idxss, rs):
+        n_epochs = self.compute_epochs(len(idxss))
+        if self.verbose and len(idxss) > 1000:
+            print "Epochs:", n_epochs
+
+        clf = SGDClassifier(loss=self.loss, penalty='l1', n_iter=n_epochs, 
                 alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                 random_state=rs)
 
-        X_train, y_train = self.build_XY(X, idxss)
+        X_train, y_train = self.build_XY(X, idxss, rs)
 
         clf.fit(X_train, y_train)
 
@@ -164,7 +186,7 @@ class FastXML(object):
 
         return new_idxs
 
-    def split_train(self, X, idxs, splitter, rs, tries=0):
+    def split_train(self, X, idxs, splitter, rs):
         l_idx, r_idx = self.split_node(idxs, splitter, rs)
 
         clf = clf_fast = None
@@ -173,7 +195,7 @@ class FastXML(object):
             if self.verbose and len(idxs) > 1000:
                 print "Training classifier"
 
-            clf, clf_fast = self.train_clf(X, [l_idx, r_idx], rs, tries)
+            clf, clf_fast = self.train_clf(X, [l_idx, r_idx], rs)
 
         return l_idx, r_idx, (clf, clf_fast)
 
@@ -203,7 +225,7 @@ class FastXML(object):
                 print "Re-splitting {}".format(len(idxs))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
-                    X, idxs, splitter, rs, tries)
+                    X, idxs, splitter, rs)
 
         if not l_idx or not r_idx:
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
@@ -273,11 +295,7 @@ class FastXML(object):
             idxs = range(dataset_len)
             while True:
                 rs.shuffle(idxs)
-                it = iter(idxs)
-                data = list(islice(it, bs))
-                while data:
-                    yield data
-                    data = list(islice(it, bs))
+                yield idxs[:bs]
 
         return gen(batch_size)
 
