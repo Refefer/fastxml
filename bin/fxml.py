@@ -3,6 +3,7 @@ from __future__ import print_function
 import math
 import sys
 import json
+import pprint
 import os
 from collections import defaultdict, Counter
 import multiprocessing
@@ -41,23 +42,29 @@ def build_arg_parser():
     build_train_parser(trainer)
 
     inference = subparsers.add_parser('inference', help="Runs a model against a dataset")
+    build_repl_parser(inference)
     build_inference_parser(inference)
+
+    repl = subparsers.add_parser('repl', help="Interactive mode for a model")
+    build_repl_parser(repl)
 
     return parser
 
-def build_inference_parser(parser):
+def build_repl_parser(parser):
     parser.add_argument("--max-predict", dest="max_predict", type=int,
         default=10,
         help="Maximum number of classes to predict"
-    )
-    parser.add_argument("--dict", dest="dict", action="store_true",
-        help="Store predict as dict"
     )
     parser.add_argument("--gamma", type=float,
         help="Overrides default gamma value for leaf classifiers"
     )
     parser.add_argument("--blend_factor", type=float,
         help="Overrides default blend factor"
+    )
+
+def build_inference_parser(parser):
+    parser.add_argument("--dict", dest="dict", action="store_true",
+        help="Store predict as dict"
     )
     parser.add_argument("--score", action="store_true",
         help="Scores results according to ndcg and precision"
@@ -113,7 +120,7 @@ def build_train_parser(parser):
     )
     parser.add_argument("--label-weight", dest="label_weight", 
         choices=('uniform', 'nnllog', 'propensity'), default='propensity',
-        help="Number of threads to use.  Will use min(threads, trees)"
+        help="Metric for computing label weighting."
     )
     parser.add_argument("--optimization", dest="optimization", 
         choices=('fastxml', 'dsimec'), default='fastxml',
@@ -367,6 +374,34 @@ def inference(args, quantizer):
     if args.score:
         print_ndcg(ndcgs)
 
+def repl(args, quantizer):
+    dataset = Dataset(args.model)
+
+    with file(dataset.model) as f:
+        clf = cPickle.load(f)
+
+    if args.blend_factor is not None:
+        clf.blend = args.blend_factor
+
+    if args.gamma is not None:
+        clf.gamma = args.gamma
+
+    # Load reverse map
+    with file(dataset.classes) as f:
+        data = json.load(f)
+        classes = {v: k for k, v in data}
+
+    try:
+        while True:
+            title = raw_input("> ")
+            X = quantizer.quantize(title)
+            y_hat = clf.predict(X, 'dict')[0]
+            yi = islice(y_hat.iteritems(), args.max_predict)
+            nvals = [[unicode(classes[k]), v] for k, v in yi]
+            pprint.pprint(nvals)
+
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == '__main__':
     args = build_arg_parser().parse_args()
@@ -374,10 +409,12 @@ if __name__ == '__main__':
     if args.standardDataset:
         quantizer = StandardDatasetQuantizer(args.verbose)
     else:
-        mlc = 1 if args.command == 'inference' else args.mlc
+        mlc = args.mlc if args.command == 'train' else 1
         quantizer = JsonQuantizer(args.verbose, mlc)
 
     if args.command == 'train':
         train(args, quantizer)
-    else:
+    elif args.command == 'inference':
         inference(args, quantizer)
+    elif args.command == 'repl':
+        repl(args, quantizer)

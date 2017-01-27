@@ -14,7 +14,7 @@ class ForkResult(Result):
         self.p = p 
 
     def ready(self):
-        return self.queue.full()
+        return self.p.is_alive()
 
     def get(self):
         result = self.queue.get()
