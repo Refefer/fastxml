@@ -84,10 +84,7 @@ TODO
 1. I'm currently estimating the leaf classifiers with the label mean and setting margin to the maximum radius of a sample in that set (ie. Hard Margin SVDD).  This works reasonably well for tail labels with few examples (~5-10 examples), however for head classes the hard margin starts to include _everything_, a problem for boosting tail labels.
 
  - Is there a better way to learn this?
- - Is there a way to leverage scikit learn's one class SVM in a space efficient manner?
 
-2. Need to move inference of leaf classifiers into Cython.  It currently slows down inference substantially compared to the Cython optimized tree navigation.
+2. Run all the standard benchmark datasets against it.
 
-3. Run all the standard benchmark datasets against it.
-
-4. Refactor.  Most of the effort has been spent on speed and it needs to be cleaned up.
+3. Refactor.  Most of the effort has been spent on speed and it needs to be cleaned up.
