@@ -61,6 +61,9 @@ def build_repl_parser(parser):
     parser.add_argument("--blend_factor", type=float,
         help="Overrides default blend factor"
     )
+    parser.add_argument("--tree", type=lambda x: map(int, x.split(',')),
+        help="Tests a particular tree set in the ensemble.  Default is all"
+    )
 
 def build_inference_parser(parser):
     parser.add_argument("--dict", dest="dict", action="store_true",
@@ -126,7 +129,7 @@ def build_train_parser(parser):
         choices=('fastxml', 'dsimec'), default='fastxml',
         help="optimization strategy to use for linear classifier"
     )
-    parser.add_argument("--eps", dest="eps", 
+    parser.add_argument("--eps", dest="eps", type=float,
         help="Sparsity epsilon.  Weights lower than eps will suppress to zero"
     )
     parser.add_argument("--leaf-classifiers", dest="leaf_class", 
@@ -354,7 +357,7 @@ def inference(args, quantizer):
 
     ndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
-        y_hat = clf.predict(X, 'dict')[0]
+        y_hat = clf.predict(X, 'dict', args.tree)[0]
         yi = islice(y_hat.iteritems(), args.max_predict)
         nvals = [[unicode(classes[k]), v] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals

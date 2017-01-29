@@ -277,6 +277,24 @@ cdef class Splitter:
         cdef float klogk = k * log(k) / log(2)
         return (klogk + self.n_labels) > (self.sparse_multiple * klogk)
 
+    cdef void resevoir_split(self, list idxs, vector[int]& left, vector[int]& right, object rs):
+        cdef int i = 0
+        cdef int idx
+        cdef int size = len(idxs)
+        cdef int half = size / 2
+
+        # Initialize counters
+        for i in range(half):
+            left.push_back(idxs[i])
+
+        for i in range(half, size):
+            idx = rs.randint(0, i)
+            if idx < half:
+                right.push_back(left[idx])
+                left[idx] = idxs[i]
+            else:
+                right.push_back(idxs[i])
+
     def split_node(self, list idxs, rs):
         cdef vector[int] left, right
         cdef LR_SET newLeft, newRight
@@ -284,11 +302,7 @@ cdef class Splitter:
         cdef int i
 
         # Initialize counters
-        for i in idxs:
-            if rs.rand() < 0.5:
-                left.push_back(i)
-            else:
-                right.push_back(i)
+        self.resevoir_split(idxs, left, right, rs)
 
         cdef float ratio = (left.size() + right.size()) / <float>self.yset.size()
         cdef int k = <int>(ratio * self.n_labels)
@@ -304,8 +318,8 @@ cdef class Splitter:
             splitter.order_labels(right, self.yset, self.weights, self.logs, self.rOrder)
 
             # Divide out the sides
-            newLeft = self.divide(left)
-            newRight = self.divide(right)
+            newLeft = self.divide(left, True)
+            newRight = self.divide(right, False)
             if newLeft.second.empty() and newRight.first.empty():
                 # Done!
                 break
@@ -315,7 +329,7 @@ cdef class Splitter:
 
         return left, right
 
-    cdef LR_SET divide(self, const vector[int]& idxs):
+    cdef LR_SET divide(self, const vector[int]& idxs, const bool is_left):
         cdef vector[int] newLeft, newRight
         cdef int i, idx
         cdef float lNdcg, rNdcg, ddcg
@@ -326,7 +340,7 @@ cdef class Splitter:
             idx = idxs[i]
             ys = self.yset[idx]
             ddcg = dcg(self.lOrder, self.rOrder, ys)
-            if ddcg <= 0:
+            if ddcg < 0 or (is_left and ddcg == 0):
                 newLeft.push_back(idx)
             else:
                 newRight.push_back(idx)

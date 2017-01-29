@@ -248,9 +248,14 @@ class FastXML(object):
 
         return Node(lNode, rNode, clff.w, clff.b)
 
-    def _predict_opt(self, X):
+    def _predict_opt(self, X, roots):
         probs = []
-        for tree in self.roots:
+        if roots is None:
+            roots = self.roots
+        else:
+            roots = [self.roots[root] for root in roots]
+
+        for tree in roots:
             probs.append(tree.predictor.predict(X.data, X.indices))
 
         return sum(probs) / len(probs)
@@ -267,11 +272,11 @@ class FastXML(object):
             return nps
         return sp.csr_matrix((f(), ([0] * len(lyp), indices)))
 
-    def predict(self, X, fmt='sparse'):
+    def predict(self, X, fmt='sparse', roots=None):
         assert fmt in ('sparse', 'dict')
         s = []
         for i in xrange(X.shape[0]):
-            mean = self._predict_opt(X[i])
+            mean = self._predict_opt(X[i], roots)
             if self.leaf_classifiers and self.blend < 1:
                 mean = self._add_leaf_probs(X[i], mean)
 
@@ -465,6 +470,7 @@ class MetricLeaf(object):
 
 def metric_cluster(y, weights=None, max_leaf_size=10, 
         sparse_multiple=25, seed=2016, verbose=False):
+
     rs = np.random.RandomState(seed=seed)
     n_labels = max(yi for ys in y for yi in ys) + 1
     if weights is None:

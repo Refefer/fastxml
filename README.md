@@ -5,6 +5,9 @@ This is a fast implementation of FastXML, PFastXML, and PFasterXML based on the 
 
  - "FastXML: A Fast, Accurate and Stable Tree-classifier for eXtreme Multi-label Learning" (https://manikvarma.github.io/pubs/prabhu14.pdf).  
  - "Extreme Multi-label Loss Functions for Recommendation, Tagging, Ranking & Other Missing Label Application" (https://manikvarma.github.io/pubs/jain16.pdf)
+ - "DiSMEC - Distributed Sparse Machines for Extreme Multi-label Classification" (https://arxiv.org/abs/1609.02521)
+
+DiSMEC makes it's appearance via an L2 penalty rather than an L1 which, when set with a high alpha and sparsity eps of 0.01-0.05, also can produce sparse linear classifiers.
 
 It's implemented in the quasi-familiar scikit-learn clf format.
 
@@ -44,7 +47,7 @@ It can then be trained:
 
 Not the omission of the flags "--standard-dataset" and "--no-remap-labels".  Since the tags/classes provided are strings, fxml.py will remap them to an integer label space for training.  During inference, it will map the label index back
 
-Simple Commandline Usage
+Simple Python Usage
 ===
 
     from fastxml import FastXML
