@@ -74,6 +74,13 @@ def build_inference_parser(parser):
     )
 
 def build_train_parser(parser):
+    parser.add_argument("--engine", dest="engine", default="auto",
+        choices=('auto', 'sgd', 'liblinear'),
+        help="Which engine to use."
+    )
+    parser.add_argument("--auto-weight", dest="auto_weight", default=32, type=int,
+        help="When engine is 'auto', number of classes * max_leaf_size remaining to revert to SGD"
+    )
     parser.add_argument("--no-remap-labels", dest="noRemap", action="store_true",
         help="Whether to remap labels to an internal format.  Needed for string labels"
     )
@@ -99,6 +106,10 @@ def build_train_parser(parser):
         default=1e-3,
         help="L1 coefficient.  Too high and it won't learn a split, too low and "\
              "it won't be sparse (larger file size, slower inference)."
+    )
+    parser.add_argument("--C", dest="C", type=float,
+        default=1,
+        help="C value for when using auto, penalizing accuracy over fit"
     )
     parser.add_argument("--iters", dest="iters", type=int,
         default=2,
@@ -297,6 +308,9 @@ def train(args, quantizer):
         n_jobs=args.threads,
         optimization=args.optimization,
         eps=args.eps,
+        C=args.C,
+        engine=args.engine,
+        auto_weight=args.auto_weight,
         verbose=args.verbose
     )
 

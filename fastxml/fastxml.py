@@ -9,7 +9,8 @@ import numpy as np
 import scipy.sparse as sp
 
 import scipy.sparse as sp
-from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import SGDClassifier, LogisticRegression
+from sklearn.svm import LinearSVC
 from sklearn.utils import shuffle
 
 from .splitter import Splitter, sparsify, compute_leafs, sparse_mean, radius, ITree
@@ -65,8 +66,8 @@ class FastXML(object):
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, n_updates=100, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
-            gamma=30, blend=0.8, leaf_eps=1e-5, optimization="fastxml", 
-            eps=None, verbose=False, seed=2016):
+            gamma=30, blend=0.8, leaf_eps=1e-5, optimization="fastxml", engine='auto',
+            auto_weight=2**5, C=1, eps=None, verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -85,6 +86,7 @@ class FastXML(object):
         self.verbose = verbose
         self.bias = bias
         self.subsample = subsample
+        assert loss in ('log', 'hinge')
         self.loss = loss
         self.sparse_multiple = sparse_multiple
         self.leaf_classifiers = leaf_classifiers
@@ -93,10 +95,14 @@ class FastXML(object):
         self.leaf_eps = leaf_eps
         assert optimization in ('fastxml', 'dsimec')
         self.optimization = optimization
+        assert engine in ('auto', 'sgd', 'liblinear')
+        self.engine = engine
         if eps is None:
             eps = 1e-6 if optimization == 'fastxml' else 1e-2
 
+        self.auto_weight = auto_weight
         self.eps = eps
+        self.C = C
 
         self.roots = []
 
@@ -169,11 +175,22 @@ class FastXML(object):
         else:
             penalty = 'l2'
 
-        clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
-                alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
-                random_state=rs)
-
+        
         X_train, y_train = self.build_XY(X, idxss, rs)
+
+        in_liblinear = X_train.shape[0] > (self.auto_weight * self.max_leaf_size)
+        if self.engine == 'liblinear' or (self.engine == 'auto' and in_liblinear):
+            if self.loss == 'log':
+                # No control over penalty
+                clf = LogisticRegression(solver='liblinear', random_state=rs, tol=1, 
+                        C=self.C, penalty=penalty)
+            else:
+                clf = LinearSVC(C=self.C, max_iter=n_epochs)
+
+        else:
+            clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
+                    alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
+                    random_state=rs)
 
         clf.fit(X_train, y_train)
 
@@ -390,9 +407,12 @@ class FastXML(object):
         else:
             W_stack = sp.csr_matrix(([], ([], [])), shape=(0, dims)).astype('float32')
 
+        b = np.array(bs, dtype='float32') 
+        t = np.array(tree, dtype='uint32') 
+        print "tree made!", W_stack.shape, W_stack.dtype, b.shape, t.shape
         return Tree(rootIdx, W_stack, 
-                np.array(bs, dtype='float32'), 
-                np.array(tree, dtype='uint32'), 
+                b,
+                t,
                 probs)
 
     def fit(self, X, y, weights=None):
