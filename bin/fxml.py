@@ -17,6 +17,7 @@ from sklearn.feature_extraction import FeatureHasher
 import scipy.sparse as sp
 
 from fastxml import FastXML
+from fastxml.fastxml import metric_cluster
 from fastxml.weights import uniform, nnllog, propensity
 
 def build_arg_parser():
@@ -45,10 +46,26 @@ def build_arg_parser():
     build_repl_parser(inference)
     build_inference_parser(inference)
 
+    cluster = subparsers.add_parser('cluster', help="Clusters labels into NDCG classes")
+    build_cluster_parser(cluster)
+
     repl = subparsers.add_parser('repl', help="Interactive mode for a model")
     build_repl_parser(repl)
 
     return parser
+
+def build_cluster_parser(parser):
+    parser.add_argument("--trees", dest="trees", type=int, default=1,
+        help="Number of random trees to cluster on"
+    )
+    parser.add_argument("--label-weight", dest="label_weight", 
+        choices=('uniform', 'nnllog', 'propensity'), default='propensity',
+        help="Metric for computing label weighting."
+    )
+    parser.add_argument("--max_leaf_size", dest="max_leaf_size", type=int,
+        default=10,
+        help="Maximumum number of examples allowed per leaf"
+    )
 
 def build_repl_parser(parser):
     parser.add_argument("--max-predict", dest="max_predict", type=int,
@@ -223,8 +240,8 @@ class JsonQuantizer(Quantizer):
                 
             X = self.quantize(data['title'])
 
-            y = [yi for yi in set(data['tags']) if f(yi)]
-            if y:
+            y = [yi for yi in set(data.get('tags', [])) if f(yi)]
+            if y or self.inference:
                 yield data, X, y
 
 class StandardDatasetQuantizer(Quantizer):
@@ -268,20 +285,24 @@ class Dataset(object):
     def classes(self):
         return os.path.join(self.dataset, 'counts')
 
-def train(args, quantizer):
+def quantize(args, quantizer, classes):
     cnt = count()
-    classes = {}
-    X_train, y_train = [], []
     for _, X, ys in quantizer.stream(args.input_file):
         nys = []
         for y in ys:
             if y not in classes:
-                classes[y] = y if args.noRemap else next(cnt)
+                classes[y] = y if getattr(args, 'noRemap', False) else next(cnt)
 
             nys.append(classes[y])
         
+        yield X, nys
+
+def train(args, quantizer):
+    cnt = count()
+    classes, X_train, y_train = {}, [], []
+    for X, y in quantize(args, quantizer, classes):
         X_train.append(X)
-        y_train.append(nys)
+        y_train.append(y)
 
     # Save the mapping
     dataset = Dataset(args.model)
@@ -314,21 +335,23 @@ def train(args, quantizer):
         verbose=args.verbose
     )
 
-    if args.label_weight == 'nnllog':
-        weights = nnllog(y_train)
-    elif args.label_weight == 'uniform':
-        weights = uniform(y_train)
-    elif args.label_weight == 'propensity':
-        weights = propensity(y_train)
-    else:
-        raise NotImplementedError(args.label_weight)
-
+    weights = compute_weights(y_train, args.label_weight)
     clf.fit(X_train, y_train, weights=weights)
 
     with file(dataset.model, 'w') as out:
         cPickle.dump(clf, out, cPickle.HIGHEST_PROTOCOL)
 
     sys.exit(0)
+
+def compute_weights(y_train, label_weight):
+    if label_weight == 'nnllog':
+        return nnllog(y_train)
+    elif label_weight == 'uniform':
+        return uniform(y_train)
+    elif label_weight == 'propensity':
+        return propensity(y_train)
+    else:
+        raise NotImplementedError(label_weight)
 
 def dcg(scores, k=None):
     if k is not None:
@@ -352,6 +375,13 @@ def print_ndcg(ndcgs):
 
     print(file=sys.stderr)
 
+def loadClasses(dataset):
+    # Load reverse map
+    with file(dataset.classes) as f:
+        data = json.load(f)
+        return {v: k for k, v in data}
+
+
 def inference(args, quantizer):
     dataset = Dataset(args.model)
 
@@ -364,10 +394,7 @@ def inference(args, quantizer):
     if args.gamma is not None:
         clf.gamma = args.gamma
 
-    # Load reverse map
-    with file(dataset.classes) as f:
-        data = json.load(f)
-        classes = {v: k for k, v in data}
+    classes = loadClasses(dataset)
 
     ndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
@@ -378,7 +405,16 @@ def inference(args, quantizer):
 
         if args.score:
             ys = set(y)
-            scores = [int(classes[yii] in ys) for yii in y_hat.iterkeys()]
+            scores = []
+            for yii in y_hat.iterkeys():
+                if classes[yii] in ys:
+                    ys.remove(classes[yii])
+                    scores.append(1)
+                else:
+                    scores.append(0)
+
+            scores.extend([1] * len(ys))
+
             ndcgs.append([ndcg(scores, i) for i in (1, 3, 5)])
             data['ndcg'] = ndcgs[-1]
 
@@ -391,6 +427,32 @@ def inference(args, quantizer):
     if args.score:
         print_ndcg(ndcgs)
 
+def cluster(args, quantizer):
+    classes, y_train = {}, []
+    for X, y in quantize(args, quantizer, classes):
+        y_train.append(y)
+
+    classes = {v: k for k, v in classes.iteritems()}
+    weights = compute_weights(y_train, args.label_weight)
+    trees = []
+    for i in xrange(args.trees):
+        tree = metric_cluster(y_train, weights=weights, 
+                max_leaf_size=args.max_leaf_size,
+                seed=2016 + i, verbose=args.verbose)
+
+        d = tree.build_discrete()[1]
+        k, p = tree.build_probs(y_train)
+        for i in xrange(k):
+            x = {classes[l]: round(ps, 3) for l, ps in p[i][1].iteritems()}
+            print("Prob", i, json.dumps(x))
+
+        td = {idx: tn for tn, idxs in d for idx in idxs}
+        trees.append(td)
+
+    for i in xrange(weights.shape[0]):
+        cluster = [t[i] for t in trees]
+        print(i, ' '.join(str(c) for c in cluster))
+    
 def repl(args, quantizer):
     dataset = Dataset(args.model)
 
@@ -403,10 +465,7 @@ def repl(args, quantizer):
     if args.gamma is not None:
         clf.gamma = args.gamma
 
-    # Load reverse map
-    with file(dataset.classes) as f:
-        data = json.load(f)
-        classes = {v: k for k, v in data}
+    classes = loadClasses(dataset)
 
     try:
         while True:
@@ -427,7 +486,7 @@ if __name__ == '__main__':
         quantizer = StandardDatasetQuantizer(args.verbose)
     else:
         mlc = args.mlc if args.command == 'train' else 1
-        quantizer = JsonQuantizer(args.verbose, mlc)
+        quantizer = JsonQuantizer(args.verbose, mlc, args.command == 'inference')
 
     if args.command == 'train':
         train(args, quantizer)
@@ -435,3 +494,5 @@ if __name__ == '__main__':
         inference(args, quantizer)
     elif args.command == 'repl':
         repl(args, quantizer)
+    elif args.command == 'cluster':
+        cluster(args, quantizer)

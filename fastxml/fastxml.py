@@ -1,7 +1,7 @@
 import multiprocessing
 import time
 from math import ceil
-from itertools import islice, repeat, izip
+from itertools import islice, repeat, izip, chain
 from contextlib import closing
 from collections import Counter, OrderedDict, defaultdict, deque
 
@@ -409,7 +409,6 @@ class FastXML(object):
 
         b = np.array(bs, dtype='float32') 
         t = np.array(tree, dtype='uint32') 
-        print "tree made!", W_stack.shape, W_stack.dtype, b.shape, t.shape
         return Tree(rootIdx, W_stack, 
                 b,
                 t,
@@ -481,12 +480,34 @@ class MetricNode(object):
     def idxs(self):
         return self.left.idxs + self.right.idxs
 
+    def build_discrete(self, n=0):
+        n2, left = self.left.build_discrete(n)
+        n3, right = self.right.build_discrete(n2 + 1)
+        return n3, left + right
+
+    def build_probs(self, w):
+        _, probs = self._build_probs(w)
+        return [p for lidx, p in probs]
+
+    def _build_probs(self, w, n=0):
+        n2, left = self.left._build_probs(w, n)
+        n3, right = self.right._build_probs(w, n2 + 1)
+        return n3, left + right
+
 class MetricLeaf(object):
     __slots__ = ('idxs')
     is_leaf = True
 
     def __init__(self, idxs):
         self.idxs = idxs
+
+    def build_discrete(self, n=0):
+        return n, [(n, self.idxs)]
+
+    def _build_probs(self, w, n=0):
+        ys = Counter(y for idx in self.idxs for y in w[idx])
+        total = len(self.idxs)
+        return n, [(n, {k: v / float(total) for k, v in ys.iteritems()})]
 
 def metric_cluster(y, weights=None, max_leaf_size=10, 
         sparse_multiple=25, seed=2016, verbose=False):
