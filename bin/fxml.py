@@ -175,6 +175,10 @@ def build_train_parser(parser):
         type=int, default=5,
         help="Filter out labels with count < min-label-count"
     )
+    parser.add_argument("--leaf-probs", dest="leafProbs",
+        action="store_true",
+        help="Computes probability: TP(X) * LP(X)"
+    )
     return parser
 
 def sliding(it, window):
@@ -332,6 +336,7 @@ def train(args, quantizer):
         C=args.C,
         engine=args.engine,
         auto_weight=args.auto_weight,
+        leaf_probs=args.leafProbs,
         verbose=args.verbose
     )
 

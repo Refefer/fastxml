@@ -67,7 +67,7 @@ class FastXML(object):
             re_split=0, n_jobs=1, alpha=1e-4, n_epochs=2, n_updates=100, bias=True, 
             subsample=1, loss='log', sparse_multiple=25, leaf_classifiers=False,
             gamma=30, blend=0.8, leaf_eps=1e-5, optimization="fastxml", engine='auto',
-            auto_weight=2**5, C=1, eps=None, verbose=False, seed=2016):
+            auto_weight=2**5, C=1, eps=None, leaf_probs=False, verbose=False, seed=2016):
 
         self.n_trees = n_trees
         self.max_leaf_size = max_leaf_size
@@ -103,6 +103,7 @@ class FastXML(object):
         self.auto_weight = auto_weight
         self.eps = eps
         self.C = C
+        self.leaf_probs = leaf_probs
 
         self.roots = []
 
@@ -284,9 +285,15 @@ class FastXML(object):
         lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, indices, self.uxs_, self.xr_)
 
         # Blend leaf and tree probabilities
-        def f():
-            nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
-            return nps
+        if self.leaf_probs:
+            def f():
+                nps = self.blend * ypi.data * (1 - self.blend) * np.array(lyp)
+                return nps
+        else:
+            def f():
+                nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
+                return nps
+
         return sp.csr_matrix((f(), ([0] * len(lyp), indices)))
 
     def predict(self, X, fmt='sparse', roots=None):
