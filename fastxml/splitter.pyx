@@ -270,14 +270,28 @@ cdef class Splitter:
     def max_label(self):
         return self.n_labels
 
-    cdef bool use_sparse(self, const int k):
+    cdef bool use_sparse(self, const float ratio):
         """
-        Compute the ratio
+        Sparse and Dense use different methods for computing ndcg scores:
+
+        Dense writes a pair vector for label,count and then sorts that vector.  This
+        can be very expensive if the total number of labels is high but the expected
+        number of labels is low.  A big part of this cost comes from zeroing out the
+        counts array every pass.
+
+        Sparse uses a hashmap to keep the counts.  Its speed up comes from not
+        having to preallocate the count vector or sort the entire vector set.
+
         """
+        cdef int k = <int>(ratio  * self.n_labels)
         cdef float klogk = k * log(k) / log(2)
         return (klogk + self.n_labels) > (self.sparse_multiple * klogk)
 
     cdef void resevoir_split(self, list idxs, vector[int]& left, vector[int]& right, object rs):
+        """
+        We use sampling to guarantee both left and right sides have exactly half the
+        items, with the P(left|X) == 0.5
+        """
         cdef int i = 0
         cdef int idx
         cdef int size = len(idxs)
@@ -305,8 +319,7 @@ cdef class Splitter:
         self.resevoir_split(idxs, left, right, rs)
 
         cdef float ratio = (left.size() + right.size()) / <float>self.yset.size()
-        cdef int k = <int>(ratio * self.n_labels)
-        if self.use_sparse(k):
+        if self.use_sparse(ratio):
             splitter = self.sparse
         else:
             splitter = self.dense

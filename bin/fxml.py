@@ -78,6 +78,9 @@ def build_repl_parser(parser):
     parser.add_argument("--blend_factor", type=float,
         help="Overrides default blend factor"
     )
+    parser.add_argument("--leaf-probs", dest="leafProbs", type=bool,
+        help="Overrides whether to show log vs P(Y|X)"
+    )
     parser.add_argument("--tree", type=lambda x: map(int, x.split(',')),
         help="Tests a particular tree set in the ensemble.  Default is all"
     )
@@ -128,9 +131,15 @@ def build_train_parser(parser):
         default=1,
         help="C value for when using auto, penalizing accuracy over fit"
     )
-    parser.add_argument("--iters", dest="iters", type=int,
+    parser.add_argument("--iters", dest="iters", 
+        type=lambda x: int(x) if x != 'auto' else x,
         default=2,
         help="Number of iterations to run over the dataset when fitting classifier"
+    )
+    parser.add_argument("--n_updates", dest="n_updates", 
+        type=int,
+        default=100,
+        help="If iters is 'auto', makes it use iters = n_update / N"
     )
     parser.add_argument("--no_bias", dest="bias", action="store_false",
         help="Fits a bias for the classifier.  Not needed if data has E[X] = 0"
@@ -229,32 +238,30 @@ class JsonQuantizer(Quantizer):
 
         return (lambda t: c[t] >= self.min_label_count)
 
-    def stream(self, fname):
+    def stream(self, fname, no_features=False):
         if self.min_label_count > 1:
             f = self.count_labels(fname)
         else:
             f = lambda x: True
 
         for data in self.yieldJson(fname):
-            if not data.get('title'):
-                continue
-
-            if not self.inference and not data.get('tags'):
-                continue
-                
-            X = self.quantize(data['title'])
-
             y = [yi for yi in set(data.get('tags', [])) if f(yi)]
-            if y or self.inference:
+            if no_features:
+                yield data, y
+            else:
+                X = self.quantize(data['title'])
                 yield data, X, y
 
 class StandardDatasetQuantizer(Quantizer):
     def __init__(self, verbose):
         self.verbose = verbose
 
-    def quantize(self, line):
+    def quantize(self, line, no_features):
         classes, sparse = line.strip().split(None, 1) 
         y = map(int, classes.split(','))
+        if no_features:
+            return y
+
         c, d = [], [] 
         for v in sparse.split():
             loc, v = v.split(":")
@@ -263,7 +270,7 @@ class StandardDatasetQuantizer(Quantizer):
 
         return (c, d), y
 
-    def stream(self, fn):
+    def stream(self, fn, no_features=False):
         with file(fn) as f:
             n_samples, n_feats, n_classes = map(int, f.readline().split())
             for i, line in enumerate(f):
@@ -273,9 +280,15 @@ class StandardDatasetQuantizer(Quantizer):
                 if self.verbose and i % 10000 == 0:
                     print("%s docs encoded" % i)
 
-                (c, d), y = self.quantize(line)
-                yield {"labels": y}, sp.csr_matrix((d, ([0] * len(d), c)), 
-                        shape=(1, n_feats), dtype='float32'), y
+
+                res = self.quantize(line, no_features)
+                if no_features:
+                    yield {"labels": res}, res
+                else:
+
+                    (c, d), y = res
+                    yield {"labels": y}, sp.csr_matrix((d, ([0] * len(d), c)), 
+                            shape=(1, n_feats), dtype='float32'), y
 
 class Dataset(object):
     def __init__(self, dataset):
@@ -289,6 +302,18 @@ class Dataset(object):
     def classes(self):
         return os.path.join(self.dataset, 'counts')
 
+class ClusterDataset(object):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def probs(self, i):
+        return os.path.join(self.dataset, 'probs.%s' % i)
+
+    @property
+    def clusters(self):
+        return os.path.join(self.dataset, 'cluster')
+
+
 def quantize(args, quantizer, classes):
     cnt = count()
     for _, X, ys in quantizer.stream(args.input_file):
@@ -301,12 +326,28 @@ def quantize(args, quantizer, classes):
         
         yield X, nys
 
+def quantize_y(args, quantizer, classes):
+    cnt = count()
+    for _, ys in quantizer.stream(args.input_file, no_features=True):
+        nys = []
+        for y in ys:
+            if y not in classes:
+                classes[y] = y if getattr(args, 'noRemap', False) else next(cnt)
+
+            nys.append(classes[y])
+        
+        yield nys
+
 def train(args, quantizer):
     cnt = count()
     classes, X_train, y_train = {}, [], []
-    for X, y in quantize(args, quantizer, classes):
-        X_train.append(X)
-        y_train.append(y)
+    for i, (X, y) in enumerate(quantize(args, quantizer, classes)):
+        if y:
+            X_train.append(X)
+            y_train.append(y)
+
+        elif args.verbose:
+            print("Skipping example %s since it has no classes matching threshold" % i)
 
     # Save the mapping
     dataset = Dataset(args.model)
@@ -324,6 +365,7 @@ def train(args, quantizer):
         re_split=args.re_split,
         alpha=args.alpha,
         n_epochs=args.iters,
+        n_updates=args.n_updates,
         bias=args.bias,
         subsample=args.subsample,
         loss=args.loss,
@@ -389,15 +431,8 @@ def loadClasses(dataset):
 
 def inference(args, quantizer):
     dataset = Dataset(args.model)
-
-    with file(dataset.model) as f:
-        clf = cPickle.load(f)
-
-    if args.blend_factor is not None:
-        clf.blend = args.blend_factor
-
-    if args.gamma is not None:
-        clf.gamma = args.gamma
+    
+    clf = load_clf(dataset, args)
 
     classes = loadClasses(dataset)
 
@@ -433,11 +468,18 @@ def inference(args, quantizer):
         print_ndcg(ndcgs)
 
 def cluster(args, quantizer):
+
+    cluster_dataset = ClusterDataset(args.model)
+    if not os.path.exists(args.model):
+        os.makedirs(args.model)
+
+    # We only need classes for the clustering
     classes, y_train = {}, []
-    for X, y in quantize(args, quantizer, classes):
+    for y in quantize_y(args, quantizer, classes):
         y_train.append(y)
 
     classes = {v: k for k, v in classes.iteritems()}
+
     weights = compute_weights(y_train, args.label_weight)
     trees = []
     for i in xrange(args.trees):
@@ -445,21 +487,22 @@ def cluster(args, quantizer):
                 max_leaf_size=args.max_leaf_size,
                 seed=2016 + i, verbose=args.verbose)
 
-        d = tree.build_discrete()[1]
-        k, p = tree.build_probs(y_train)
-        for i in xrange(k):
-            x = {classes[l]: round(ps, 3) for l, ps in p[i][1].iteritems()}
-            print("Prob", i, json.dumps(x))
+        d = tree.build_discrete()
+        p = tree.build_probs(y_train)
+        with file(cluster_dataset.probs(i), 'w') as out:
+            for i, pi in enumerate(p):
+                x = {classes[l]: round(ps, 3) for l, ps in pi.iteritems()}
+                print(json.dumps(x), file=out)
 
         td = {idx: tn for tn, idxs in d for idx in idxs}
         trees.append(td)
 
-    for i in xrange(weights.shape[0]):
-        cluster = [t[i] for t in trees]
-        print(i, ' '.join(str(c) for c in cluster))
+    with file(cluster_dataset.clusters, 'w') as out:
+        for i in xrange(len(y_train)):
+            cluster = [t[i] for t in trees]
+            print(json.dumps(cluster), file=out)
     
-def repl(args, quantizer):
-    dataset = Dataset(args.model)
+def load_clf(dataset, args):
 
     with file(dataset.model) as f:
         clf = cPickle.load(f)
@@ -469,6 +512,16 @@ def repl(args, quantizer):
 
     if args.gamma is not None:
         clf.gamma = args.gamma
+
+    if args.leafProbs is not None:
+        clf.leaf_probs = args.leafProbs
+
+    return clf
+
+def repl(args, quantizer):
+    dataset = Dataset(args.model)
+    
+    clf = load_clf(dataset, args)
 
     classes = loadClasses(dataset)
 

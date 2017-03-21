@@ -82,7 +82,7 @@ class FastXML(object):
         self.seed = seed
         assert isinstance(n_epochs, int) or n_epochs == 'auto'
         self.n_epochs = n_epochs
-        self.n_updates = n_updates
+        self.n_updates = float(n_updates)
         self.verbose = verbose
         self.bias = bias
         self.subsample = subsample
@@ -125,6 +125,15 @@ class FastXML(object):
         return sp.csr_matrix((v, (i, j)), shape=(1, ml)).astype('float32')
 
     def build_X(self, X, idxs):
+        if isinstance(X, np.ndarray):
+            return self.build_X_dense(X, idxs)
+
+        return self.build_X_sparse(X, idxs)
+
+    def build_X_dense(self, X, idxs):
+        return X[idxs]
+
+    def build_X_sparse(self, X, idxs):
         indptr = [0]
         indices = []
         data = []
@@ -167,9 +176,8 @@ class FastXML(object):
         return n_epochs
 
     def train_clf(self, X, idxss, rs):
-        n_epochs = self.compute_epochs(len(idxss))
-        if self.verbose and len(idxss) > 1000:
-            print "Epochs:", n_epochs
+        N = sum(len(idx) for idx in idxss)
+        n_epochs = self.compute_epochs(N)
 
         if self.optimization == 'fastxml':
             penalty = 'l1'
@@ -186,7 +194,9 @@ class FastXML(object):
                 clf = LogisticRegression(solver='liblinear', random_state=rs, tol=1, 
                         C=self.C, penalty=penalty)
             else:
-                clf = LinearSVC(C=self.C, max_iter=n_epochs)
+                clf = LinearSVC(C=self.C, fit_intercept=self.bias, 
+                        max_iter=n_epochs, class_weight='balanced', 
+                        penalty=penalty, random_state=rs)
 
         else:
             clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
@@ -232,7 +242,13 @@ class FastXML(object):
 
     def grow_root(self, X, y, idxs, rs, splitter):
         node = self.grow_tree(X, y, idxs, rs, splitter)
-        return self.compact(node, X[0].shape[1])
+
+        if isinstance(X, np.ndarray):
+            cols = X.shape[1]
+        else:
+            cols = X[0].shape[1]
+
+        return self.compact(node, cols)
 
     def grow_tree(self, X, y, idxs, rs, splitter):
 
@@ -299,7 +315,8 @@ class FastXML(object):
     def predict(self, X, fmt='sparse', roots=None):
         assert fmt in ('sparse', 'dict')
         s = []
-        for i in xrange(X.shape[0]):
+        num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
+        for i in xrange(num):
             mean = self._predict_opt(X[i], roots)
             if self.leaf_classifiers and self.blend < 1:
                 mean = self._add_leaf_probs(X[i], mean)
@@ -487,9 +504,13 @@ class MetricNode(object):
     def idxs(self):
         return self.left.idxs + self.right.idxs
 
-    def build_discrete(self, n=0):
-        n2, left = self.left.build_discrete(n)
-        n3, right = self.right.build_discrete(n2 + 1)
+    def build_discrete(self):
+        _, res = self._build_discrete(0)
+        return res
+
+    def _build_discrete(self, n=0):
+        n2, left = self.left._build_discrete(n)
+        n3, right = self.right._build_discrete(n2 + 1)
         return n3, left + right
 
     def build_probs(self, w):
@@ -508,7 +529,10 @@ class MetricLeaf(object):
     def __init__(self, idxs):
         self.idxs = idxs
 
-    def build_discrete(self, n=0):
+    def build_discrete(self):
+        return self._build_discrete(0)[1]
+
+    def _build_discrete(self, n=0):
         return n, [(n, self.idxs)]
 
     def _build_probs(self, w, n=0):
