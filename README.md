@@ -3,9 +3,9 @@ FastXML / PFastXML / PFasterXML - Fast and Accurate Tree Extreme Multi-label Cla
 
 This is a fast implementation of FastXML, PFastXML, and PFasterXML based on the following papers:
 
- - "FastXML: A Fast, Accurate and Stable Tree-classifier for eXtreme Multi-label Learning" [Paper](https://manikvarma.github.io/pubs/prabhu14.pdf).  
+ - "FastXML: A Fast, Accurate and Stable Tree-classifier for eXtreme Multi-label Learning" [Paper](https://manikvarma.github.io/pubs/prabhu14.pdf)
  - "Extreme Multi-label Loss Functions for Recommendation, Tagging, Ranking & Other Missing Label Application" [Paper](https://manikvarma.github.io/pubs/jain16.pdf)
- - "DiSMEC - Distributed Sparse Machines for Extreme Multi-label Classification" [Paper](https://arxiv.org/abs/1609.02521)[Code](https://sites.google.com/site/rohitbabbar/code/dismec)
+ - "DiSMEC - Distributed Sparse Machines for Extreme Multi-label Classification" [Paper](https://arxiv.org/abs/1609.02521) [Code](https://sites.google.com/site/rohitbabbar/code/dismec)
 
 DiSMEC makes it's appearance via an L2 penalty rather than an L1 which, when set with a high alpha and sparsity eps of 0.01-0.05, also can produce sparse linear classifiers.
 
