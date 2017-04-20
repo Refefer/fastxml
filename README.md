@@ -1,7 +1,7 @@
-FastXML / PFastXML / PFasterXML - Fast and Accurate Tree Extreme Multi-label Classifier
+FastXML / PFastXML / PFastreXML - Fast and Accurate Tree Extreme Multi-label Classifier
 ===
 
-This is a fast implementation of FastXML, PFastXML, and PFasterXML based on the following papers:
+This is a fast implementation of FastXML, PFastXML, and PFastreXML based on the following papers:
 
  - "FastXML: A Fast, Accurate and Stable Tree-classifier for eXtreme Multi-label Learning" [Paper](https://manikvarma.github.io/pubs/prabhu14.pdf)
  - "Extreme Multi-label Loss Functions for Recommendation, Tagging, Ranking & Other Missing Label Application" [Paper](https://manikvarma.github.io/pubs/jain16.pdf)
@@ -73,7 +73,7 @@ Simple Python Usage
     clf.fit(X, y, weights)
     
     ###############
-    # PFasterXML
+    # PFastreXML
     ###############
     clf = FastXML(n_trees=32, n_jobs=-1, leaf_classifiers=True)
     clf.fit(X, y, weights)
