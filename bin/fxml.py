@@ -18,7 +18,7 @@ import scipy.sparse as sp
 
 from fastxml import FastXML
 from fastxml.fastxml import metric_cluster
-from fastxml.weights import uniform, nnllog, propensity
+from fastxml.weights import uniform, nnllog, propensity, logexp
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description='FastXML trainer and tester',
@@ -59,7 +59,7 @@ def build_cluster_parser(parser):
         help="Number of random trees to cluster on"
     )
     parser.add_argument("--label-weight", dest="label_weight", 
-        choices=('uniform', 'nnllog', 'propensity'), default='propensity',
+        choices=('uniform', 'nnllog', 'propensity', 'logexp'), default='propensity',
         help="Metric for computing label weighting."
     )
     parser.add_argument("--max_leaf_size", dest="max_leaf_size", type=int,
@@ -159,7 +159,7 @@ def build_train_parser(parser):
         help="Number of threads to use.  Will use min(threads, trees)"
     )
     parser.add_argument("--label-weight", dest="label_weight", 
-        choices=('uniform', 'nnllog', 'propensity'), default='propensity',
+        choices=('uniform', 'nnllog', 'propensity', 'logexp'), default='propensity',
         help="Metric for computing label weighting."
     )
     parser.add_argument("--optimization", dest="optimization", 
@@ -302,6 +302,11 @@ class Dataset(object):
     def classes(self):
         return os.path.join(self.dataset, 'counts')
 
+    @property
+    def weights(self):
+        return os.path.join(self.dataset, 'weights')
+
+
 class ClusterDataset(object):
     def __init__(self, dataset):
         self.dataset = dataset
@@ -357,6 +362,11 @@ def train(args, quantizer):
     with file(dataset.classes, 'w') as out:
         json.dump(classes.items(), out)
 
+    weights = compute_weights(y_train, args.label_weight)
+    with file(dataset.weights, 'w') as out:
+        for i, w in enumerate(weights):
+            out.write("%s,%s\n" % (i, w))
+
     # Train
     clf = FastXML(
         n_trees=args.trees,
@@ -382,7 +392,6 @@ def train(args, quantizer):
         verbose=args.verbose
     )
 
-    weights = compute_weights(y_train, args.label_weight)
     clf.fit(X_train, y_train, weights=weights)
 
     with file(dataset.model, 'w') as out:
@@ -397,6 +406,8 @@ def compute_weights(y_train, label_weight):
         return uniform(y_train)
     elif label_weight == 'propensity':
         return propensity(y_train)
+    elif label_weight == 'logexp':
+        return logexp(y_train)
     else:
         raise NotImplementedError(label_weight)
 
