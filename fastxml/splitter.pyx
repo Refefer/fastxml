@@ -40,19 +40,20 @@ cdef void replace_vecs(vector[int]& dest, vector[int]& src1, vector[int]& src2):
     dest.swap(src1)
     copy_into(dest, src2)
 
-cdef inline float dcg(const vector[float]& ord_left, const vector[float]& ord_right, const vector[int]& ls):
+cdef inline void dcg(const vector[float]& ord_left, const vector[float]& ord_right, const vector[int]& ls, pair[float,float]& p):
     """
     We only need to use DCG since we're only using it to determine which partition
     bucket the label set in
     """
     cdef int i, l
-    cdef float log_left, log_right, sl = 0, sr = 0
+    cdef float sl = 0, sr = 0
     for i in range(ls.size()):
         l = ls[i]
         sl += ord_left[l]
         sr += ord_right[l]
 
-    return sr - sl
+    p.first = sl
+    p.second = sr
 
 cdef class NDCGSplitter:
     cdef void order_labels(self, const vector[int]& idxs, const YSET& yset, 
@@ -262,9 +263,10 @@ cdef class Splitter:
         self.weights.reserve(size)
         self.logs.reserve(size)
 
+        prev = 0.0
         for i in range(size):
             self.weights.push_back(ws[i])
-            self.logs.push_back(1 / (i + 2.0))
+            self.logs.push_back(1 / (i + 2.0) )
 
     @property
     def max_label(self):
@@ -296,6 +298,11 @@ cdef class Splitter:
         cdef int idx
         cdef int size = len(idxs)
         cdef int half = size / 2
+
+        if half < 2:
+            for i in range(len(idxs)):
+                left.push_back(idxs[i])
+            return
 
         # Initialize counters
         for i in range(half):
@@ -345,18 +352,26 @@ cdef class Splitter:
     cdef LR_SET divide(self, const vector[int]& idxs, const bool is_left):
         cdef vector[int] newLeft, newRight
         cdef int i, idx
-        cdef float lNdcg, rNdcg, ddcg
+        cdef float lNdcg, rNdcg
         cdef LR_SET empty
         cdef vector[int] ys
+        cdef pair[float,float] dcg_out
 
         for i in range(idxs.size()):
             idx = idxs[i]
             ys = self.yset[idx]
-            ddcg = dcg(self.lOrder, self.rOrder, ys)
-            if ddcg < 0 or (is_left and ddcg == 0):
+            dcg(self.lOrder, self.rOrder, ys, dcg_out)
+            if dcg_out.first > dcg_out.second:
+                newLeft.push_back(idx)
+            elif dcg_out.first < dcg_out.second:
+                newRight.push_back(idx)
+            elif is_left:
                 newLeft.push_back(idx)
             else:
                 newRight.push_back(idx)
+
+            lNdcg += dcg_out.first
+            rNdcg += dcg_out.second
 
         empty.first = newLeft
         empty.second = newRight

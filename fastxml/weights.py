@@ -18,7 +18,7 @@ def propensity(y, A=0.55, B=1.5):
     C = (np.log(N) - 1) * (B + 1) ** A
     weights = []
     for i in xrange(ml):
-        weights.append(1 + C * np.exp(-A * np.log(Nl.get(i, 0) + B)))
+        weights.append(1 + C * (Nl.get(i, 0) + B) ** -A)
 
     return np.array(weights, dtype='float32')
 

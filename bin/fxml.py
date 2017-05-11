@@ -162,6 +162,10 @@ def build_train_parser(parser):
         choices=('uniform', 'nnllog', 'propensity', 'logexp'), default='propensity',
         help="Metric for computing label weighting."
     )
+    parser.add_argument("--label-weight-hp", dest="label_weight_hp", 
+        metavar="P", nargs=2, type=float, default = (None, None),
+        help="Hyper parameters for label weight tuning"
+    )
     parser.add_argument("--optimization", dest="optimization", 
         choices=('fastxml', 'dsimec'), default='fastxml',
         help="optimization strategy to use for linear classifier"
@@ -362,7 +366,7 @@ def train(args, quantizer):
     with file(dataset.classes, 'w') as out:
         json.dump(classes.items(), out)
 
-    weights = compute_weights(y_train, args.label_weight)
+    weights = compute_weights(y_train, args.label_weight, args.label_weight_hp)
     with file(dataset.weights, 'w') as out:
         for i, w in enumerate(weights):
             out.write("%s,%s\n" % (i, w))
@@ -399,15 +403,20 @@ def train(args, quantizer):
 
     sys.exit(0)
 
-def compute_weights(y_train, label_weight):
+def compute_weights(y_train, label_weight, hps):
+
+    args = (y_train,) 
+    if hps[0] is not None:
+        args += tuple(hps)
+
     if label_weight == 'nnllog':
-        return nnllog(y_train)
+        return nnllog(*args)
     elif label_weight == 'uniform':
         return uniform(y_train)
     elif label_weight == 'propensity':
-        return propensity(y_train)
+        return propensity(*args)
     elif label_weight == 'logexp':
-        return logexp(y_train)
+        return logexp(*args)
     else:
         raise NotImplementedError(label_weight)
 
@@ -491,7 +500,7 @@ def cluster(args, quantizer):
 
     classes = {v: k for k, v in classes.iteritems()}
 
-    weights = compute_weights(y_train, args.label_weight)
+    weights = compute_weights(y_train, args.label_weight, args.label_weight_hp)
     trees = []
     for i in xrange(args.trees):
         tree = metric_cluster(y_train, weights=weights, 
