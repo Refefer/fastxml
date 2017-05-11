@@ -295,7 +295,7 @@ class FastXML(object):
         return sum(probs) / len(probs)
 
     def _add_leaf_probs(self, X, ypi):
-        Xn = l2norm(X)
+        Xn = X / self.norms_
         indices = ypi.indices
 
         lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, indices, self.uxs_, self.xr_)
@@ -303,6 +303,7 @@ class FastXML(object):
         # Blend leaf and tree probabilities
         if self.leaf_probs:
             def f():
+                #nps = self.blend * ypi.data * (1 - self.blend) * np.array(lyp)
                 nps = self.blend * ypi.data * (1 - self.blend) * np.array(lyp)
                 return nps
         else:
@@ -442,13 +443,14 @@ class FastXML(object):
         
         self.roots = self._build_roots(X, y, weights)
         if self.leaf_classifiers:
-            self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
-
+            self.norms_, self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
+    
     def _compute_leaf_probs(self, X, y):
         dd = defaultdict(list)
+        norms = compute_unit_norms(X)
         ml = 0
         for Xi, yis in izip(X, y):
-            Xin = l2norm(Xi)
+            Xin = col_norm(norms, Xi)
             for yi in yis:
                 dd[yi].append(Xin)
                 ml = max(yi, ml)
@@ -470,10 +472,14 @@ class FastXML(object):
                 xmeans.append(ux)
                 xrs.append(r)
 
-        return sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
+        return norms, sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
 
-def l2norm(Xi):
-    return Xi / np.linalg.norm(Xi.data)
+def col_norm(norms, Xi):
+    Xi = Xi.copy()
+    for i, ind in enumerate(Xi.indices):
+        Xi.data[i] /= norms[ind]
+
+    return Xi
 
 def compute_leaf_metrics(data):
     i, Xs, eps = data
@@ -488,9 +494,20 @@ def compute_leaf_metrics(data):
     else:
         return i, None, 0.0
 
-    ux = l2norm(ux)
+    ux = ux.astype('float32')
     rad = max(radius(ux.data, ux.indices, Xi.data, Xi.indices) for Xi in Xs)
     return i, ux, rad
+
+def compute_unit_norms(X):
+    print X[0].shape[1]
+    norms = np.zeros(X[0].shape[1])
+    for Xi in X:
+        for i, ind in enumerate(Xi.indices):
+            norms[ind] = Xi.data[i] ** 2
+
+    norms = norms ** .5
+    norms[np.where(norms == 0)] = 1.0
+    return norms.astype('float32')
 
 class MetricNode(object):
     __slots__ = ('left', 'right')
