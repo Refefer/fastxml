@@ -30,9 +30,11 @@ setup(name='fastxml',
       version="1.0.0",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
+      author_email="refefer@gmail.com",
+      packages=["fastxml"],
+      license="LICENSE",
       cmdclass = {'build_ext': build_ext},
       ext_modules=extensions,
-      packages=['fastxml'],
       scripts=[
           "bin/fxml.py"
       ],
@@ -42,4 +44,9 @@ setup(name='fastxml',
         "scikit-learn>=0.17",
         "Cython>=0.23.4",
       ],
+      classifiers=[
+       "License :: OSI Approved :: Apache Software License",
+       "Programming Language :: Python :: 2.7",
+       "Operating System :: OS Independent"
+      ], 
       author='Andrew Stanton')
