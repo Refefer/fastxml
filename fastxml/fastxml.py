@@ -295,16 +295,19 @@ class FastXML(object):
         return sum(probs) / len(probs)
 
     def _add_leaf_probs(self, X, ypi):
-        Xn = X / self.norms_
+        Xn = norm(self.norms_, X)
         indices = ypi.indices
 
         lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, indices, self.uxs_, self.xr_)
 
         # Blend leaf and tree probabilities
-        if self.leaf_probs:
+        if self.blend == 0.0:
             def f():
-                #nps = self.blend * ypi.data * (1 - self.blend) * np.array(lyp)
-                nps = self.blend * ypi.data * (1 - self.blend) * np.array(lyp)
+                return (1 - self.blend) * np.array(lyp)
+
+        elif self.leaf_probs:
+            def f():
+                nps = (self.blend * ypi.data + (1 - self.blend) * np.array(lyp)) / 2.
                 return nps
         else:
             def f():
@@ -450,7 +453,7 @@ class FastXML(object):
         norms = compute_unit_norms(X)
         ml = 0
         for Xi, yis in izip(X, y):
-            Xin = col_norm(norms, Xi)
+            Xin = norm(norms, Xi)
             for yi in yis:
                 dd[yi].append(Xin)
                 ml = max(yi, ml)
@@ -474,11 +477,12 @@ class FastXML(object):
 
         return norms, sp.vstack(xmeans), np.array(xrs, dtype=np.float32)
 
-def col_norm(norms, Xi):
-    Xi = Xi.copy()
+def norm(norms, Xi):
+    Xi = Xi.astype('float64')
     for i, ind in enumerate(Xi.indices):
         Xi.data[i] /= norms[ind]
 
+    Xi.data /= np.linalg.norm(Xi.data)
     return Xi
 
 def compute_leaf_metrics(data):
@@ -494,12 +498,10 @@ def compute_leaf_metrics(data):
     else:
         return i, None, 0.0
 
-    ux = ux.astype('float32')
     rad = max(radius(ux.data, ux.indices, Xi.data, Xi.indices) for Xi in Xs)
     return i, ux, rad
 
 def compute_unit_norms(X):
-    print X[0].shape[1]
     norms = np.zeros(X[0].shape[1])
     for Xi in X:
         for i, ind in enumerate(Xi.indices):
