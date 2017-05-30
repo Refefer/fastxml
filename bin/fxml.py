@@ -30,8 +30,12 @@ def build_arg_parser():
     parser.add_argument("input_file", 
         help="Input file to use")
 
-    parser.add_argument("--standard-dataset", dest="standardDataset", action="store_true",
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--standard-dataset", dest="standardDataset", action="store_true",
         help="Input is standard dataset sparse format")
+
+    group.add_argument("--pre-gen", dest="preGen", type=int,
+        help="Input is is pregenerated sparse format")
     
     parser.add_argument("--verbose", action="store_true",
         help="Verbose"
@@ -66,6 +70,10 @@ def build_cluster_parser(parser):
         default=10,
         help="Maximumum number of examples allowed per leaf"
     )
+    parser.add_argument("--label-weight-hp", dest="label_weight_hp", 
+        metavar="P", nargs=2, type=float, default = (None, None),
+        help="Hyper parameters for label weight tuning"
+    )
 
 def build_repl_parser(parser):
     parser.add_argument("--max-predict", dest="max_predict", type=int,
@@ -78,7 +86,7 @@ def build_repl_parser(parser):
     parser.add_argument("--blend_factor", type=float,
         help="Overrides default blend factor"
     )
-    parser.add_argument("--leaf-probs", dest="leafProbs", type=bool,
+    parser.add_argument("--leaf-probs", dest="leafProbs", type=lambda x: x.lower() == "true",
         help="Overrides whether to show log vs P(Y|X)"
     )
     parser.add_argument("--tree", type=lambda x: map(int, x.split(',')),
@@ -91,6 +99,9 @@ def build_inference_parser(parser):
     )
     parser.add_argument("--score", action="store_true",
         help="Scores results according to ndcg and precision"
+    )
+    parser.add_argument("--score-only", dest="scoreOnly", action="store_true",
+        help="Scores the dataset and returns the average NDCG scores"
     )
 
 def build_train_parser(parser):
@@ -256,7 +267,26 @@ class JsonQuantizer(Quantizer):
                 X = self.quantize(data['title'])
                 yield data, X, y
 
+class PregenQuantizer(JsonQuantizer):
+
+    def __init__(self, verbose, min_label_count, dims, inference=False):
+        super(PregenQuantizer, self).__init__(verbose, min_label_count, inference)
+        self.dims = dims
+
+    def quantize(self, text):
+        data = []
+        row_ind = []
+        col_ind = []
+        for p in text.split():
+            rIndex, rValue = p.split(':')
+            row_ind.append(0)
+            col_ind.append(int(rIndex))
+            data.append(float(rValue))
+
+        return sp.csr_matrix((data, (row_ind, col_ind)), (1, self.dims)).astype('float32')
+
 class StandardDatasetQuantizer(Quantizer):
+
     def __init__(self, verbose):
         self.verbose = verbose
 
@@ -283,7 +313,6 @@ class StandardDatasetQuantizer(Quantizer):
 
                 if self.verbose and i % 10000 == 0:
                     print("%s docs encoded" % i)
-
 
                 res = self.quantize(line, no_features)
                 if no_features:
@@ -435,12 +464,13 @@ def ndcg(scores, k=None, eps=1e-6):
 
     return dcgs / idcgs
 
-def print_ndcg(ndcgs):
+def print_ndcg(ndcgs, toStderr):
+    fout = sys.stderr if toStderr else sys.stdout
     ndcgT = zip(*ndcgs)
     for i in xrange(3):
-        print('NDCG@{}: {}'.format(2 * i + 1, np.mean(ndcgT[i])), file=sys.stderr)
+        print('NDCG@{}: {}'.format(2 * i + 1, np.mean(ndcgT[i])), file=fout)
 
-    print(file=sys.stderr)
+    print(file=fout)
 
 def loadClasses(dataset):
     # Load reverse map
@@ -459,7 +489,7 @@ def inference(args, quantizer):
     ndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
         y_hat = clf.predict(X, 'dict', args.tree)[0]
-        yi = islice(y_hat.iteritems(), args.max_predict)
+        yi    = islice(y_hat.iteritems(), args.max_predict)
         nvals = [[unicode(classes[k]), v] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals
 
@@ -480,12 +510,13 @@ def inference(args, quantizer):
 
             if len(ndcgs) % 100 == 0:
                 print("Seen:", len(ndcgs), file=sys.stderr)
-                print_ndcg(ndcgs)
+                print_ndcg(ndcgs, not args.scoreOnly)
 
-        print(json.dumps(data))
+        if not args.scoreOnly:
+            print(json.dumps(data))
 
     if args.score:
-        print_ndcg(ndcgs)
+        print_ndcg(ndcgs, not args.scoreOnly)
 
 def cluster(args, quantizer):
 
@@ -562,6 +593,9 @@ if __name__ == '__main__':
     # Quantize
     if args.standardDataset:
         quantizer = StandardDatasetQuantizer(args.verbose)
+    elif args.preGen is not None:
+        mlc = args.mlc if args.command == 'train' else 1
+        quantizer = PregenQuantizer(args.verbose, mlc, args.preGen, args.command == 'inference')
     else:
         mlc = args.mlc if args.command == 'train' else 1
         quantizer = JsonQuantizer(args.verbose, mlc, args.command == 'inference')
