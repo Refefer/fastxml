@@ -292,7 +292,7 @@ class FastXML(object):
         for tree in roots:
             probs.append(tree.predictor.predict(X.data, X.indices))
 
-        return sum(probs) / len(probs)
+        return sp.csr_matrix((sp.vstack(probs).sum(axis=0) / len(probs)))
 
     def _add_leaf_probs(self, X, ypi):
         Xn = norm(self.norms_, X)
