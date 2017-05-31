@@ -13,7 +13,7 @@ from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.svm import LinearSVC
 from sklearn.utils import shuffle
 
-from .splitter import Splitter, sparsify, compute_leafs, sparse_mean, radius, ITree
+from .splitter import Splitter, sparsify, compute_leafs, sparse_mean_64, sparse_mean_32, radius, ITree
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -292,6 +292,9 @@ class FastXML(object):
         for tree in roots:
             probs.append(tree.predictor.predict(X.data, X.indices))
 
+        ret = np.zeros(probs[0].shape[1], dtype='float32')
+        sparse_mean_32(probs, ret)
+        return sp.csr_matrix(ret)
         return sp.csr_matrix((sp.vstack(probs).sum(axis=0) / len(probs)))
 
     def _add_leaf_probs(self, X, ypi):
@@ -309,6 +312,7 @@ class FastXML(object):
             def f():
                 nps = (self.blend * ypi.data + (1 - self.blend) * np.array(lyp)) / 2.
                 return nps
+
         else:
             def f():
                 nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))

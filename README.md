@@ -81,10 +81,6 @@ Simple Python Usage
 TODO
 ===
 
-1. I'm currently estimating the leaf classifiers with the label mean and setting margin to the maximum radius of a sample in that set (ie. Hard Margin SVDD).  This works reasonably well for tail labels with few examples (~5-10 examples), however for head classes the hard margin starts to include _everything_, a problem for boosting tail labels.
+1. Run all the standard benchmark datasets against it.
 
- - Is there a better way to learn this?
-
-2. Run all the standard benchmark datasets against it.
-
-3. Refactor.  Most of the effort has been spent on speed and it needs to be cleaned up.
+2. Refactor.  Most of the effort has been spent on speed and it needs to be cleaned up.

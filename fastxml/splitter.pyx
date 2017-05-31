@@ -611,7 +611,7 @@ def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_
 
     return ret
 
-def sparse_mean(list xs, np.ndarray[np.double_t] ret):
+def sparse_mean_64(list xs, np.ndarray[np.double_t] ret):
     cdef int i, k
     cdef int [:] indices
     cdef double [:] data
@@ -620,7 +620,23 @@ def sparse_mean(list xs, np.ndarray[np.double_t] ret):
         x = xs[i]
         indices = x.indices
         data = x.data
-        for k in xrange(data.shape[0]):
+        for k in range(data.shape[0]):
+            r[indices[k]] += data[k]
+
+    cdef int size = len(xs)
+    for i in range(r.shape[0]):
+        r[i] /= size
+
+def sparse_mean_32(list xs, np.ndarray[np.float32_t] ret):
+    cdef int i, k
+    cdef int [:] indices
+    cdef float [:] data
+    cdef float [:] r = ret
+    for i in range(len(xs)):
+        x = xs[i]
+        indices = x.indices
+        data = x.data
+        for k in range(data.shape[0]):
             r[indices[k]] += data[k]
 
     cdef int size = len(xs)
