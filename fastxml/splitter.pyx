@@ -459,7 +459,6 @@ cdef class ITree:
         self.bias = bias
 
     def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
-        cdef SR x = convert_to_sr(indices, data, data.shape[0])
         cdef int idx = self.predict_sr(indices, data)
         return self.payloads[idx]
 
@@ -482,10 +481,10 @@ cdef class ITree:
         cdef float d
 
         cdef unsigned int [:,:] tree = self.tree
-        cdef int [:] w_indptr = self.w_indptr
-        cdef int [:] w_indices = self.w_indices
-        cdef float [:] w_data = self.w_data
-        cdef float [:] bias = self.bias
+        cdef int [:] w_indptr        = self.w_indptr
+        cdef int [:] w_indices       = self.w_indices
+        cdef float [:] w_data        = self.w_data
+        cdef float [:] bias          = self.bias
 
         o1 = 0
         s1 = data.shape[0]
