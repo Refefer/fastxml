@@ -295,7 +295,6 @@ class FastXML(object):
         ret = np.zeros(probs[0].shape[1], dtype='float32')
         sparse_mean_32(probs, ret)
         return sp.csr_matrix(ret)
-        return sp.csr_matrix((sp.vstack(probs).sum(axis=0) / len(probs)))
 
     def _add_leaf_probs(self, X, ypi):
         Xn = norm(self.norms_, X)
