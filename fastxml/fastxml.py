@@ -492,7 +492,7 @@ def compute_leaf_metrics(data):
     i, Xs, eps = data
     if len(Xs) > 100:
         v = np.zeros(Xs[0].shape[1], dtype='float64')
-        sparse_mean(Xs, v)
+        sparse_mean_64(Xs, v)
         ux = sparsify(v.reshape((1, -1)), eps=eps).astype('float64')
 
     elif len(Xs) > 1:
