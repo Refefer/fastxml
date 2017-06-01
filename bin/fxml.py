@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 from __future__ import print_function
-import math
 import sys
 import json
 import pprint
@@ -19,6 +18,7 @@ import scipy.sparse as sp
 from fastxml import FastXML
 from fastxml.fastxml import metric_cluster
 from fastxml.weights import uniform, nnllog, propensity, logexp
+from fastxml.metrics import ndcg, precision, pSndcg
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description='FastXML trainer and tester',
@@ -291,7 +291,11 @@ class StandardDatasetQuantizer(Quantizer):
         self.verbose = verbose
 
     def quantize(self, line, no_features):
-        classes, sparse = line.strip().split(None, 1) 
+        if " " not in line:
+            classes, sparse = line.strip(), ""
+        else:
+            classes, sparse = line.strip().split(None, 1) 
+
         y = map(int, classes.split(','))
         if no_features:
             return y
@@ -449,26 +453,19 @@ def compute_weights(y_train, label_weight, hps):
     else:
         raise NotImplementedError(label_weight)
 
-def dcg(scores, k=None):
-    if k is not None:
-        scores = scores[:k]
-
-    return sum(rl / math.log(i + 2) for i, rl in enumerate(scores))
-
-def ndcg(scores, k=None, eps=1e-6):
-    idcgs = dcg(sorted(scores, reverse=True), k)
-    if idcgs < eps:
-        return 0.0
-
-    dcgs = dcg(scores, k)
-
-    return dcgs / idcgs
-
-def print_ndcg(ndcgs, toStderr):
+def print_metrics(ndcgs, precs, pndcgs, toStderr):
     fout = sys.stderr if toStderr else sys.stdout
     ndcgT = zip(*ndcgs)
+    precsT = zip(*precs)
+    pndcgT = zip(*pndcgs)
+    for i in xrange(3):
+        print('P@{}: {}'.format(2 * i + 1, np.mean(precsT[i])), file=fout)
+
     for i in xrange(3):
         print('NDCG@{}: {}'.format(2 * i + 1, np.mean(ndcgT[i])), file=fout)
+
+    for i in xrange(3):
+        print('pNDCG@{}: {}'.format(2 * i + 1, np.mean(pndcgT[i])), file=fout)
 
     print(file=fout)
 
@@ -478,6 +475,13 @@ def loadClasses(dataset):
         data = json.load(f)
         return {v: k for k, v in data}
 
+def loadPropensities(dataset):
+    props = []
+    with open(dataset.weights) as f:
+        for line in f:
+            props.append(1 / float(line.strip().split(',')[1]))
+
+    return props
 
 def inference(args, quantizer):
     dataset = Dataset(args.model)
@@ -485,18 +489,23 @@ def inference(args, quantizer):
     clf = load_clf(dataset, args)
 
     classes = loadClasses(dataset)
+    propensities = loadPropensities(dataset)
 
     ndcgs = []
+    precs = []
+    pndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
         y_hat = clf.predict(X, 'dict', args.tree)[0]
         yi    = islice(y_hat.iteritems(), args.max_predict)
-        nvals = [[unicode(classes[k]), v] for k, v in yi]
+        nvals = [[unicode(classes[k]), float(v)] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals
 
         if args.score:
             ys = set(y)
             scores = []
+            props = []
             for yii in y_hat.iterkeys():
+                props.append(propensities[yii])
                 if classes[yii] in ys:
                     ys.remove(classes[yii])
                     scores.append(1)
@@ -506,17 +515,21 @@ def inference(args, quantizer):
             scores.extend([1] * len(ys))
 
             ndcgs.append([ndcg(scores, i) for i in (1, 3, 5)])
+            pndcgs.append([pSndcg(scores, props, i) for i in (1, 3, 5)])
+            precs.append([precision(scores, i) for i in (1, 3, 5)])
             data['ndcg'] = ndcgs[-1]
+            data['precision'] = precs[-1]
+            data['pSndcg'] = pndcgs[-1]
 
             if len(ndcgs) % 100 == 0:
                 print("Seen:", len(ndcgs), file=sys.stderr)
-                print_ndcg(ndcgs, not args.scoreOnly)
+                print_metrics(ndcgs, precs, pndcgs, not args.scoreOnly)
 
         if not args.scoreOnly:
             print(json.dumps(data))
 
     if args.score:
-        print_ndcg(ndcgs, not args.scoreOnly)
+        print_metrics(ndcgs, precs, pndcgs, not args.scoreOnly)
 
 def cluster(args, quantizer):
 

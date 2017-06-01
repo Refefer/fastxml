@@ -604,7 +604,6 @@ def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_
         mi_indices = m_indices[start:end]
         mi_data    = m_data[start:end]
 
-        #rad = radius2(Xii, Xid, m_indices, m_data, Xii.shape[0], m_indices.shape[0])
         rad = radius2(Xii, Xid, mi_indices, mi_data, Xii.shape[0], mi_indices.shape[0])
         k = exp(gamma  * (rad - ur)) 
         ret.push_back(1. / (1. + k))
