@@ -312,7 +312,7 @@ class StandardDatasetQuantizer(Quantizer):
         with file(fn) as f:
             n_samples, n_feats, n_classes = map(int, f.readline().split())
             for i, line in enumerate(f):
-                if ',' not in line:
+                if i == 0:
                     continue
 
                 if self.verbose and i % 10000 == 0:
