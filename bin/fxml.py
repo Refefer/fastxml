@@ -293,10 +293,16 @@ class StandardDatasetQuantizer(Quantizer):
     def quantize(self, line, no_features):
         if " " not in line:
             classes, sparse = line.strip(), ""
+        elif line.startswith(' '):
+            classes, sparse = '', line.strip()
         else:
             classes, sparse = line.strip().split(None, 1) 
 
-        y = map(int, classes.split(','))
+        if classes:
+            y = map(int, classes.split(','))
+        else:
+            y = []
+
         if no_features:
             return y
 
