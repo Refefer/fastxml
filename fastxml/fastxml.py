@@ -1,3 +1,4 @@
+import os
 import multiprocessing
 import time
 from math import ceil
@@ -55,11 +56,40 @@ class Tree(object):
 
         return self._predictor
 
+    def _load_predictor(self):
+        self._predictor = ITree(self.rootIdx, self.W, self.b, self.tree, self.probs)
+
     def __reduce__(self):
         return (Tree, (self.rootIdx, self.W, self.b, self.tree, self.probs), {})
 
     def __setstate__(self, d):
-        pass
+        # Load it up
+        self._load_predictor()
+
+def sparse_rows_iter(sparse):
+    if str(sparse.dtype) == 'float32':
+        fmt = "{0:d}:{1:.9g}"
+    elif str(sparse.dtype) == 'float64':
+        fmt = "{0:d}:{1:.15g}" 
+    else:
+        raise TypeError("Can only handle f32 and f64 data types")
+
+    indptr, indices, data = sparse.indptr, sparse.indices, sparse.data
+    for startIdx in xrange(indptr.shape[0] - 1):
+        start, stop = indptr[startIdx], indptr[startIdx+1]
+        sparse_lines = []
+        for i in xrange(start, stop):
+            sparse_lines.append(fmt.format(indices[i], data[i]))
+
+        yield ' '.join(sparse_lines)
+
+def dense_rows_iter(dense):
+    for i in xrange(dense.shape[0]):
+        dense_lines = []
+        for j in xrange(dense.shape[1]):
+            dense_lines.append("{0:.9g}".format(dense[i,j]))
+
+        yield ' '.join(dense_lines)
 
 class FastXML(object):
 
@@ -218,6 +248,58 @@ class FastXML(object):
 
     def __setstate__(self, d):
         self.__dict__.update(d)
+
+    def _save_trees(self, dname):
+        for i, tree in enumerate(self.roots):
+            fname = lambda x: os.path.join(dname, 'tree.%s.%s' % (i, x))
+
+            # Write out dense tree
+            with file(fname('tree'), 'w') as out:
+                for line in dense_rows_iter(tree.tree):
+                    out.write(line)
+                    out.write('\n')
+
+            # Write out weights
+            with file(fname('weights'), 'w') as out:
+                for line in sparse_rows_iter(tree.W):
+                    out.write(line)
+                    out.write('\n')
+
+            # Write bias
+            with file(fname('bias'), 'w') as out:
+                out.write(' '.join('{:.9g}'.format(b) for b in tree.b))
+
+            # Write Probabilities
+            with file(fname('probs'), 'w') as out:
+                for p in tree.probs:
+                    for line in sparse_rows_iter(p):
+                        out.write(line)
+                        out.write('\n')
+
+
+    def _save_leaf_classifiers(self, dname):
+        fname = lambda x: os.path.join(dname, 'lc.%s' % x)
+        # Save l2 norms
+        with file(fname('norms'), 'w') as out:
+            out.write(' '.join('{:.9g}'.format(n) for n in self.norms_))
+
+        # Save Radii
+        with file(fname('radii'), 'w') as out:
+            out.write(' '.join('{:.9g}'.format(r) for r in self.xr_))
+
+        # Save means
+        with file(fname('means'), 'w') as out:
+            for line in sparse_rows_iter(self.uxs_):
+                out.write(line)
+                out.write('\n')
+
+    def save(self, dname):
+        # Save trees
+        self._save_trees(dname)
+        
+        # Save leaf classifiers
+        if self.leaf_classifiers:
+            self._save_leaf_classifiers(dname)
 
     def resplit_data(self, X, idxs, clf, classes):
         X_train = self.build_X(X, idxs)
