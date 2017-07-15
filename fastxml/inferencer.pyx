@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, initializedcheck=False
+#cython: boundscheck=False, wraparound=False
 
 import numpy as np
 import scipy.sparse as sp
@@ -139,6 +139,78 @@ cdef load_dense_int(str fname, vector[vector[int]]& dense):
 
             dense.push_back(row)
 
+cdef class Blender:
+    cdef IForest forest
+    cdef LeafComputer lc 
+
+    def __init__(self, IForest forest, LeafComputer lc):
+        self.forest = forest
+        self.lc = lc
+
+    def predict(self, np.ndarray[np.float32_t] data, 
+                      np.ndarray[np.int32_t] indices, 
+                      const float blend,
+                      const float gamma,
+                      const bool keep_probs=False):
+        cdef SR sr = convert_to_sr(indices, data, data.shape[0])
+        cdef SR tree_probs
+
+        # Get tree probs
+        self.forest._predict(sr, tree_probs)
+
+        # If blend == 1.0, we're done
+        if blend == 1.0:
+            return sr_to_sparse(tree_probs, self.forest.n_labels)
+
+        cdef SR leaf_probs
+        cdef vector[int] labels
+        cdef int i
+
+        # Build the indices
+        for i in range(tree_probs.size()):
+            labels.push_back(tree_probs[i].first)
+
+        # Compute leaf classifier
+        self.lc.predict(sr, labels, gamma, leaf_probs)
+
+        cdef SR res
+        self._blend(tree_probs, leaf_probs, blend, keep_probs, res)
+        return sr_to_sparse(res, self.forest.n_labels)
+
+    cdef void _blend(self, const SR& tree_probs, 
+                           const SR& leaf_probs, 
+                           const float blend, 
+                           const bool keep_probs, 
+                           SR& out):
+        cdef int i
+        cdef DP tp, lp, t
+        for i in range(tree_probs.size()):
+            tp = tree_probs[i]
+            lp = leaf_probs[i]
+            if keep_probs:
+                tp.second *= blend
+                lp.second *= (1 - blend)
+            else:
+                tp.second = log(tp.second) * blend
+                lp.second = log(lp.second) * (1 - blend)
+
+            t.first = tp.first
+            t.second = tp.second + lp.second
+            out.push_back(t)
+
+cdef class IForestBlender:
+    cdef IForest forest
+
+    def __init__(self, IForest forest):
+        self.forest = forest
+
+    def predict(self, np.ndarray[np.float32_t] data, 
+                      np.ndarray[np.int32_t] indices, 
+                      const float blend,
+                      const float gamma,
+                      const bool keep_probs=False):
+
+        return self.forest.predict(data, indices)
 
 cdef class IForest:
     cdef list trees
@@ -151,23 +223,24 @@ cdef class IForest:
         for i in range(trees):
             self.trees.append(ITree(dname, i))
     
-    cdef SR* _predict(self, const SR& sr, ITree t):
+    cdef SR* _predict_tree(self, const SR& sr, ITree t):
         return t.predict_payload(sr)
-    
-    def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
-        cdef SR sr = convert_to_sr(indices, data, data.shape[0])
+
+    cdef void _predict(self, const SR& sr, SR& payload):
         cdef vector[SR*] prob_set
-        cdef SR payload
-        cdef object sparse
         cdef SR* res
         for t in self.trees:
-            res = self._predict(sr, t)
+            res = self._predict_tree(sr, t)
             prob_set.push_back(res)
 
         sparse_sr_mean(prob_set, payload)
-        sparse = sr_to_sparse(payload, self.n_labels)
+    
+    def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
+        cdef SR sr = convert_to_sr(indices, data, data.shape[0])
+        cdef SR payload
 
-        return sparse
+        self._predict(sr, payload)
+        return sr_to_sparse(payload, self.n_labels)
 
 cdef class ITree:
     cdef int rootIdx
@@ -234,28 +307,86 @@ cdef class ITree:
 
         return self.index(node)
 
-cdef double radius2(const int [:] xi, const double [:] xd, 
-                    const int [:] ui, const double [:] ud, 
-                    const int s1, const int s2):
+cdef class LeafComputer:
+    cdef vector[float] norms
+    cdef vector[float] radii
+    cdef CSR means
+
+    def __init__(self, str dname):
+        p = dname.rstrip('/') + '/lc'
+
+        # Load norms
+        cdef DENSE tmp
+        load_dense_f32(p + '.norms', tmp)
+        self.norms.swap(tmp[0])
+
+        # Load bias
+        cdef DENSE tmp2
+        load_dense_f32(p + '.radii', tmp2)
+        self.radii.swap(tmp2[0])
+        
+        # Load means
+        load_sparse(p + '.means', self.means)
+
+    cdef void predict(self, const SR& X, const vector[int] ys, const float gamma, SR& out):
+        cdef SR normed
+        cdef int yi, i
+        cdef DP p
+        cdef float dist
+        cdef SR* mean
+
+        # Norm the vector
+        norm(self.norms, X, normed)
+
+        # Loop over each class, determining the leaf classifier vlaues
+        for i in range(ys.size()):
+            yi = ys[i]
+            mean = &self.means[yi]
+            dist = radius_sr(normed, deref(mean))
+            k = exp(gamma  * (dist - self.radii[yi])) 
+            p.first = i
+            p.second = 1. / (1. + k)
+            out.push_back(p)
+
+cdef void norm(const vector[float]& norms, const SR& X, SR& normed):
+    cdef int i
+    cdef float l2 = 0
+    cdef DP p
+
+    # Column norm and compute l2 norm
+    for i in range(X.size()):
+        p = X[i]
+        p.second /= norms[p.first]
+        l2 += p.second * p.second
+        normed.push_back(p)
+    
+    # Divide out the l2 norm
+    l2 = pow(l2, .5)
+    for i in range(normed.size()):
+        normed[i].second = normed[i].second / l2
+
+
+cdef float radius_sr(const SR& xi, const SR& ui):
     """
     Computes the Sum((Xi - Ux) ** 2)
     """
 
     cdef int xidx = 0, uidx = 0
-    cdef int xcol, ucol
+    cdef int s1 = xi.size(), s2 = ui.size()
     cdef double tally = 0.0, diff
+    cdef DP xp, up
 
     while xidx < s1 and uidx < s2:
-        xcol = xi[xidx]
-        ucol = ui[uidx]
-        if xcol < ucol:
-            tally += pow(xd[xidx], 2) 
+        xp = xi[xidx]
+        up = ui[uidx]
+        if xp.first < up.first:
+            tally += pow(xp.second, 2) 
             xidx += 1
-        elif xcol > ucol:
-            tally += pow(ud[uidx], 2)
+        elif xp.first > up.first:
+            tally += pow(up.second, 2)
             uidx += 1
         else:
-            diff = (xd[xidx] - ud[uidx])
+            diff = xp.second - up.second
             tally += pow(diff, 2)
             xidx += 1
             uidx += 1
@@ -263,75 +394,11 @@ cdef double radius2(const int [:] xi, const double [:] xd,
     # Get the remainder
     while xidx < s1 or uidx < s2:
         if xidx < s1:
-            tally += xd[xidx] * xd[xidx]
+            tally += pow(xi[xidx].second, 2)
             xidx += 1
         else:
-            tally += ud[uidx] * ud[uidx]
+            tally += pow(ui[uidx].second, 2)
             uidx += 1
 
     return tally
-
-def radius(np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, 
-           np.ndarray[np.double_t] uid, np.ndarray[np.int32_t] uii):
-
-    return radius2(Xii, Xid, uii, uid, Xii.shape[0], uii.shape[0])
-
-def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, 
-        np.ndarray[np.int32_t] indices, object sparse, np.ndarray[np.float32_t] radius):
-    cdef int i, start, end, index
-    cdef float r, ur, rad
-    cdef object m 
-    cdef vector[float] ret
-
-    cdef int [:] m_indptr = sparse.indptr
-    cdef int [:] m_indices = sparse.indices, mi_indices
-    cdef double [:] m_data = sparse.data, mi_data
-
-    for i in range(indices.shape[0]):
-        index = indices[i]
-        ur = radius[index]
-
-        start = m_indptr[index]
-        end   = m_indptr[index+1]
-
-        mi_indices = m_indices[start:end]
-        mi_data    = m_data[start:end]
-
-        rad = radius2(Xii, Xid, mi_indices, mi_data, Xii.shape[0], mi_indices.shape[0])
-        k = exp(gamma  * (rad - ur)) 
-        ret.push_back(1. / (1. + k))
-
-    return ret
-
-def sparse_mean_64(list xs, np.ndarray[np.double_t] ret):
-    cdef int i, k
-    cdef int [:] indices
-    cdef double [:] data
-    cdef double [:] r = ret
-    for i in range(len(xs)):
-        x = xs[i]
-        indices = x.indices
-        data = x.data
-        for k in range(data.shape[0]):
-            r[indices[k]] += data[k]
-
-    cdef int size = len(xs)
-    for i in range(r.shape[0]):
-        r[i] /= size
-
-def sparse_mean_32(list xs, np.ndarray[np.float32_t] ret):
-    cdef int i, k
-    cdef int [:] indices
-    cdef float [:] data
-    cdef float [:] r = ret
-    for i in range(len(xs)):
-        x = xs[i]
-        indices = x.indices
-        data = x.data
-        for k in range(data.shape[0]):
-            r[indices[k]] += data[k]
-
-    cdef int size = len(xs)
-    for i in range(r.shape[0]):
-        r[i] /= size
 

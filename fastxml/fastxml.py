@@ -16,7 +16,7 @@ from sklearn.svm import LinearSVC
 from sklearn.utils import shuffle
 
 from .splitter import Splitter, sparsify, compute_leafs, sparse_mean_64, sparse_mean_32, radius, ITree
-from .inferencer import IForest
+from .inferencer import IForest, LeafComputer, Blender, IForestBlender
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -326,7 +326,15 @@ class FastXML(object):
         with file(os.path.join(dname, 'settings')) as f:
             clf.__dict__.update(json.load(f))
 
-        clf.forest = IForest(dname, clf.n_trees, clf.n_labels)
+        forest = IForest(dname, clf.n_trees, clf.n_labels)
+        if clf.leaf_classifiers:
+            lc = LeafComputer(dname)
+            predictor = Blender(forest, lc)
+        else:
+            predictor = IForestBlender(forest)
+
+        clf.predictor = predictor
+
         return clf
 
     def resplit_data(self, X, idxs, clf, classes):
@@ -392,22 +400,17 @@ class FastXML(object):
 
         return Node(lNode, rNode, clff.w, clff.b)
 
+    def _predict_fast(self, X):
+        return self.predictor.predict(X.data, X.indices, self.blend, self.gamma, self.leaf_probs)
+
     def _predict_opt(self, X):
+        probs = []
+        for tree in self.roots:
+            probs.append(tree.predictor.predict(X.data, X.indices))
 
-        if hasattr(self, 'forest'):
-            probs = self.forest.predict(X.data, X.indices)
-            return probs
-            #for p in probs:
-            #    p.copy()
-        else:
-            probs = []
-            for tree in self.roots:
-                probs.append(tree.predictor.predict(X.data, X.indices))
-                #probs[-1].copy()
-
-            ret = np.zeros(probs[0].shape[1], dtype='float32')
-            sparse_mean_32(probs, ret)
-            return sp.csr_matrix(ret)
+        ret = np.zeros(probs[0].shape[1], dtype='float32')
+        sparse_mean_32(probs, ret)
+        return sp.csr_matrix(ret)
 
     def _add_leaf_probs(self, X, ypi):
         Xn = norm(self.norms_, X)
@@ -437,9 +440,12 @@ class FastXML(object):
         s = []
         num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
         for i in xrange(num):
-            mean = self._predict_opt(X[i])
-            if self.leaf_classifiers and self.blend < 1:
-                mean = self._add_leaf_probs(X[i], mean)
+            if hasattr(self, 'predictor'):
+                mean = self._predict_fast(X)
+            else:
+                mean = self._predict_opt(X[i])
+                if self.leaf_classifiers and self.blend < 1:
+                    mean = self._add_leaf_probs(X[i], mean)
 
             if fmt == 'sparse':
                 s.append(mean)
