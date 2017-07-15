@@ -441,7 +441,7 @@ class FastXML(object):
         num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
         for i in xrange(num):
             if hasattr(self, 'predictor'):
-                mean = self._predict_fast(X)
+                mean = self._predict_fast(X[i])
             else:
                 mean = self._predict_opt(X[i])
                 if self.leaf_classifiers and self.blend < 1:
