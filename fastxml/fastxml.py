@@ -1,6 +1,7 @@
 import os
 import multiprocessing
 import time
+import json
 from math import ceil
 from itertools import islice, repeat, izip, chain
 from contextlib import closing
@@ -15,6 +16,7 @@ from sklearn.svm import LinearSVC
 from sklearn.utils import shuffle
 
 from .splitter import Splitter, sparsify, compute_leafs, sparse_mean_64, sparse_mean_32, radius, ITree
+from .inferencer import IForest
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -276,7 +278,6 @@ class FastXML(object):
                         out.write(line)
                         out.write('\n')
 
-
     def _save_leaf_classifiers(self, dname):
         fname = lambda x: os.path.join(dname, 'lc.%s' % x)
         # Save l2 norms
@@ -293,13 +294,40 @@ class FastXML(object):
                 out.write(line)
                 out.write('\n')
 
+    def _save_settings(self, dname):
+        import json
+        settings = {}
+        for k, v in self.__dict__.iteritems():
+            if k == 'roots' or k.endswith('_'): 
+                continue
+
+            settings[k] = v
+
+        with open(os.path.join(dname, 'settings'), 'w') as out:
+            json.dump(settings, out)
+
     def save(self, dname):
+        if not os.path.exists(dname):
+            os.mkdir(dname)
+
+        # Save settings
+        self._save_settings(dname)
+
         # Save trees
         self._save_trees(dname)
         
         # Save leaf classifiers
         if self.leaf_classifiers:
             self._save_leaf_classifiers(dname)
+
+    @staticmethod
+    def load(dname):
+        clf = FastXML()
+        with file(os.path.join(dname, 'settings')) as f:
+            clf.__dict__.update(json.load(f))
+
+        clf.forest = IForest(dname, clf.n_trees, clf.n_labels)
+        return clf
 
     def resplit_data(self, X, idxs, clf, classes):
         X_train = self.build_X(X, idxs)
@@ -364,19 +392,22 @@ class FastXML(object):
 
         return Node(lNode, rNode, clff.w, clff.b)
 
-    def _predict_opt(self, X, roots):
-        probs = []
-        if roots is None:
-            roots = self.roots
+    def _predict_opt(self, X):
+
+        if hasattr(self, 'forest'):
+            probs = self.forest.predict(X.data, X.indices)
+            return probs
+            #for p in probs:
+            #    p.copy()
         else:
-            roots = [self.roots[root] for root in roots]
+            probs = []
+            for tree in self.roots:
+                probs.append(tree.predictor.predict(X.data, X.indices))
+                #probs[-1].copy()
 
-        for tree in roots:
-            probs.append(tree.predictor.predict(X.data, X.indices))
-
-        ret = np.zeros(probs[0].shape[1], dtype='float32')
-        sparse_mean_32(probs, ret)
-        return sp.csr_matrix(ret)
+            ret = np.zeros(probs[0].shape[1], dtype='float32')
+            sparse_mean_32(probs, ret)
+            return sp.csr_matrix(ret)
 
     def _add_leaf_probs(self, X, ypi):
         Xn = norm(self.norms_, X)
@@ -401,12 +432,12 @@ class FastXML(object):
 
         return sp.csr_matrix((f(), ([0] * len(lyp), indices)))
 
-    def predict(self, X, fmt='sparse', roots=None):
+    def predict(self, X, fmt='sparse'):
         assert fmt in ('sparse', 'dict')
         s = []
         num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
         for i in xrange(num):
-            mean = self._predict_opt(X[i], roots)
+            mean = self._predict_opt(X[i])
             if self.leaf_classifiers and self.blend < 1:
                 mean = self._add_leaf_probs(X[i], mean)
 
@@ -456,6 +487,8 @@ class FastXML(object):
             weights = np.ones(nl, dtype='float32')
         else:
             assert weights.shape[0] == nl, "Weights need to be same as largest y class"
+
+        self.n_labels = nl
 
         # Initialize cython splitter
         splitter = Splitter(y, weights, self.sparse_multiple)
@@ -528,11 +561,10 @@ class FastXML(object):
                 probs)
 
     def fit(self, X, y, weights=None):
-        
         self.roots = self._build_roots(X, y, weights)
         if self.leaf_classifiers:
             self.norms_, self.uxs_, self.xr_ = self._compute_leaf_probs(X, y)
-    
+
     def _compute_leaf_probs(self, X, y):
         dd = defaultdict(list)
         norms = compute_unit_norms(X)

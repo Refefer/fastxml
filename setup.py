@@ -23,6 +23,9 @@ class build_ext(_build_ext):
 extensions = [
   Extension("fastxml.splitter", ["fastxml/splitter.pyx"],
             language='c++',
+            extra_compile_args=['-O3', '-std=c++11', '-stdlib=libc++', '-mmacosx-version-min=10.8'] if sys.platform == 'darwin' else ['-O3', '-std=c++11']),
+  Extension("fastxml.inferencer", ["fastxml/inferencer.pyx"],
+            language='c++',
             extra_compile_args=['-O3', '-std=c++11', '-stdlib=libc++', '-mmacosx-version-min=10.8'] if sys.platform == 'darwin' else ['-O3', '-std=c++11'])
 ]
 

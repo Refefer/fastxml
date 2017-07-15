@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False
+#cython: boundscheck=False, wraparound=False, initializedcheck=False
 
 from collections import defaultdict
 import numpy as np
@@ -446,7 +446,7 @@ cdef class ITree:
 
     def __init__(self, int rootIdx, 
                        W,
-                       np.ndarray[np.float32_t] bias,
+                       np.ndarray[np.float32_t, mode='c'] bias,
                        np.ndarray[np.uint32_t, ndim=2, mode='c'] tree, 
                        list payloads):
 
@@ -480,27 +480,27 @@ cdef class ITree:
         cdef unsigned int [:] node
         cdef float d
 
-        cdef unsigned int [:,:] tree = self.tree
-        cdef int [:] w_indptr        = self.w_indptr
-        cdef int [:] w_indices       = self.w_indices
-        cdef float [:] w_data        = self.w_data
-        cdef float [:] bias          = self.bias
+        #cdef unsigned int [:,:] tree = self.tree
+        #cdef int [:] w_indptr        = self.w_indptr
+        #cdef int [:] w_indices       = self.w_indices
+        #cdef float [:] w_data        = self.w_data
+        #cdef float [:] bias          = self.bias
 
         o1 = 0
         s1 = data.shape[0]
-        node = tree[self.rootIdx]
+        node = self.tree[self.rootIdx]
         while not self.is_leaf(node):
             index = self.index(node)
-            o2 = w_indptr[index]
-            s2 = w_indptr[index + 1] - o2
-            d = sparse_dot(indices, data, w_indices, w_data, s1, s2, o1, o2)
-            d += bias[index]
+            o2 = self.w_indptr[index]
+            s2 = self.w_indptr[index + 1] - o2
+            d = sparse_dot(indices, data, self.w_indices, self.w_data, s1, s2, o1, o2)
+            d += self.bias[index]
             if d < 0:
                 nIndex = self.left(node)
             else:
                 nIndex = self.right(node)
 
-            node = tree[nIndex]
+            node = self.tree[nIndex]
 
         return self.index(node)
 
