@@ -527,3 +527,76 @@ def compute_unit_norms(X):
     return norms.astype('float32')
 
 
+class MetricNode(object):
+    __slots__ = ('left', 'right')
+    is_leaf = False
+    
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+
+    @property
+    def idxs(self):
+        return self.left.idxs + self.right.idxs
+
+    def build_discrete(self):
+        _, res = self._build_discrete(0)
+        return res
+
+    def _build_discrete(self, n=0):
+        n2, left = self.left._build_discrete(n)
+        n3, right = self.right._build_discrete(n2 + 1)
+        return n3, left + right
+
+    def build_probs(self, w):
+        _, probs = self._build_probs(w)
+        return [p for lidx, p in probs]
+
+    def _build_probs(self, w, n=0):
+        n2, left = self.left._build_probs(w, n)
+        n3, right = self.right._build_probs(w, n2 + 1)
+        return n3, left + right
+
+class MetricLeaf(object):
+    __slots__ = ('idxs')
+    is_leaf = True
+
+    def __init__(self, idxs):
+        self.idxs = idxs
+
+    def build_discrete(self):
+        return self._build_discrete(0)[1]
+
+    def _build_discrete(self, n=0):
+        return n, [(n, self.idxs)]
+
+    def _build_probs(self, w, n=0):
+        ys = Counter(y for idx in self.idxs for y in w[idx])
+        total = len(self.idxs)
+        return n, [(n, {k: v / float(total) for k, v in ys.iteritems()})]
+
+def metric_cluster(y, weights=None, max_leaf_size=10, 
+        sparse_multiple=25, seed=2016, verbose=False):
+
+    rs = np.random.RandomState(seed=seed)
+    n_labels = max(yi for ys in y for yi in ys) + 1
+    if weights is None:
+        weights = np.ones(n_labels, dtype='float32')
+
+    # Initialize splitter
+    splitter = Splitter(y, weights, sparse_multiple)
+
+    def _metric_cluster(idxs):
+        if verbose and len(idxs) > 1000:
+            print "Splitting:", len(idxs)
+
+        if len(idxs) < max_leaf_size:
+            return MetricLeaf(idxs)
+
+        left, right = splitter.split_node(idxs, rs)
+        if not left or not right:
+            return MetricLeaf(idxs)
+
+        return MetricNode(_metric_cluster(left), _metric_cluster(right))
+
+    return _metric_cluster(range(len(y)))

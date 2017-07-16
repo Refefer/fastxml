@@ -377,133 +377,6 @@ cdef class Splitter:
         empty.second = newRight
         return empty
  
-cdef float dot(const SR& x, const SR& w, const float bias):
-    cdef int xidx = 0, widx = 0, xi, wi
-    cdef int x_s = x.size(), w_s = w.size()
-    cdef float tally = 0.0
-
-    while xidx < x_s and widx < w_s:
-        xi = x[xidx].first 
-        wi = w[widx].first
-        if xi < wi:
-            xidx += 1
-        elif xi > wi:
-            widx += 1
-        else:
-            tally += x[xidx].second * w[widx].second
-            xidx += 1
-            widx += 1
-
-    return tally + bias
-
-cdef SR convert_to_sr(const int [:] indices, const float [:] data, const int size):
-    cdef SR sparse
-    cdef pair[int,float] p
-    cdef int i
-
-    for i in range(size):
-        p = pair[int,float]()
-        p.first = indices[i]
-        p.second = data[i]
-        sparse.push_back(p)
-
-    return sparse
-
-cdef float sparse_dot(const int [:]& i1, const float [:]& d1, 
-                      const int [:]& i2, const float [:]& d2, 
-                      const int s1, const int s2,
-                      const int o1, const int o2):
-
-    cdef int xidx = 0, widx = 0, xi, wi, xoidx, woidx
-    cdef float tally = 0.0
-
-    while xidx < s1 and widx < s2:
-        xoidx = o1 + xidx
-        woidx = o2 + widx
-        xi = i1[xoidx]
-        wi = i2[woidx]
-        if xi < wi:
-            xidx += 1
-        elif xi > wi:
-            widx += 1
-        else:
-            tally += d1[xoidx] * d2[woidx]
-            xidx += 1
-            widx += 1
-
-    return tally
-
-cdef class ITree:
-    cdef int rootIdx
-    cdef unsigned int[:, :] tree
-    cdef list payloads
-
-    cdef int [:] w_indptr
-    cdef int [:] w_indices
-    cdef float [:] w_data
-
-    cdef float[:] bias
-
-    def __init__(self, int rootIdx, 
-                       W,
-                       np.ndarray[np.float32_t, mode='c'] bias,
-                       np.ndarray[np.uint32_t, ndim=2, mode='c'] tree, 
-                       list payloads):
-
-        self.rootIdx = rootIdx
-        self.payloads = payloads
-        self.tree = tree
-        self.w_indptr = W.indptr
-        self.w_indices = W.indices
-        self.w_data = W.data
-        self.bias = bias
-
-    def predict(self, np.ndarray[np.float32_t] data, np.ndarray[np.int32_t] indices):
-        cdef int idx = self.predict_sr(indices, data)
-        return self.payloads[idx]
-
-    cdef inline unsigned int index(self, unsigned int[:]& node):
-        return node[0]
-
-    cdef inline unsigned int left(self, unsigned int[:]& node):
-        return node[1]
-
-    cdef inline unsigned int right(self, unsigned int[:]& node):
-        return node[2]
-
-    cdef inline bool is_leaf(self, unsigned int[:]& node):
-        return node[3] == 1
-
-    cdef int predict_sr(self, int [:]& indices, float [:]& data):
-        cdef unsigned int index, nIndex
-        cdef int s1, s2, o1, o2
-        cdef unsigned int [:] node
-        cdef float d
-
-        #cdef unsigned int [:,:] tree = self.tree
-        #cdef int [:] w_indptr        = self.w_indptr
-        #cdef int [:] w_indices       = self.w_indices
-        #cdef float [:] w_data        = self.w_data
-        #cdef float [:] bias          = self.bias
-
-        o1 = 0
-        s1 = data.shape[0]
-        node = self.tree[self.rootIdx]
-        while not self.is_leaf(node):
-            index = self.index(node)
-            o2 = self.w_indptr[index]
-            s2 = self.w_indptr[index + 1] - o2
-            d = sparse_dot(indices, data, self.w_indices, self.w_data, s1, s2, o1, o2)
-            d += self.bias[index]
-            if d < 0:
-                nIndex = self.left(node)
-            else:
-                nIndex = self.right(node)
-
-            node = self.tree[nIndex]
-
-        return self.index(node)
-
 def sparsify(np.ndarray[np.float64_t, ndim=2] dense, float eps=1e-6):
     """
     More work speeding up common operations that at large N add up to real time
@@ -583,54 +456,11 @@ def radius(np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii,
 
     return radius2(Xii, Xid, uii, uid, Xii.shape[0], uii.shape[0])
 
-def compute_leafs(float gamma, np.ndarray[np.double_t] Xid, np.ndarray[np.int32_t] Xii, 
-        np.ndarray[np.int32_t] indices, object sparse, np.ndarray[np.float32_t] radius):
-    cdef int i, start, end, index
-    cdef float r, ur, rad
-    cdef object m 
-    cdef vector[float] ret
-
-    cdef int [:] m_indptr = sparse.indptr
-    cdef int [:] m_indices = sparse.indices, mi_indices
-    cdef double [:] m_data = sparse.data, mi_data
-
-    for i in range(indices.shape[0]):
-        index = indices[i]
-        ur = radius[index]
-
-        start = m_indptr[index]
-        end   = m_indptr[index+1]
-
-        mi_indices = m_indices[start:end]
-        mi_data    = m_data[start:end]
-
-        rad = radius2(Xii, Xid, mi_indices, mi_data, Xii.shape[0], mi_indices.shape[0])
-        k = exp(gamma  * (rad - ur)) 
-        ret.push_back(1. / (1. + k))
-
-    return ret
-
 def sparse_mean_64(list xs, np.ndarray[np.double_t] ret):
     cdef int i, k
     cdef int [:] indices
     cdef double [:] data
     cdef double [:] r = ret
-    for i in range(len(xs)):
-        x = xs[i]
-        indices = x.indices
-        data = x.data
-        for k in range(data.shape[0]):
-            r[indices[k]] += data[k]
-
-    cdef int size = len(xs)
-    for i in range(r.shape[0]):
-        r[i] /= size
-
-def sparse_mean_32(list xs, np.ndarray[np.float32_t] ret):
-    cdef int i, k
-    cdef int [:] indices
-    cdef float [:] data
-    cdef float [:] r = ret
     for i in range(len(xs)):
         x = xs[i]
         indices = x.indices
