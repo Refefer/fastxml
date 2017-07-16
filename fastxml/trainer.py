@@ -3,9 +3,9 @@ import multiprocessing
 import time
 import json
 from math import ceil
-from itertools import islice, repeat, izip, chain
+from itertools import repeat, izip
 from contextlib import closing
-from collections import Counter, OrderedDict, defaultdict, deque
+from collections import Counter, defaultdict
 
 import numpy as np
 import scipy.sparse as sp
@@ -15,8 +15,7 @@ from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.svm import LinearSVC
 from sklearn.utils import shuffle
 
-from .splitter import Splitter, sparsify, compute_leafs, sparse_mean_64, sparse_mean_32, radius, ITree
-from .inferencer import IForest, LeafComputer, Blender, IForestBlender
+from .splitter import Splitter, sparsify, sparse_mean_64, radius
 from .proc import faux_fork_call, fork_call
 
 class Node(object):
@@ -49,24 +48,6 @@ class Tree(object):
         self.b = b
         self.tree = tree
         self.probs = probs
-        self._predictor = None
-
-    @property
-    def predictor(self):
-        if self._predictor is None:
-            self._predictor = ITree(self.rootIdx, self.W, self.b, self.tree, self.probs)
-
-        return self._predictor
-
-    def _load_predictor(self):
-        self._predictor = ITree(self.rootIdx, self.W, self.b, self.tree, self.probs)
-
-    def __reduce__(self):
-        return (Tree, (self.rootIdx, self.W, self.b, self.tree, self.probs), {})
-
-    def __setstate__(self, d):
-        # Load it up
-        self._load_predictor()
 
 def sparse_rows_iter(sparse):
     if str(sparse.dtype) == 'float32':
@@ -93,50 +74,7 @@ def dense_rows_iter(dense):
 
         yield ' '.join(dense_lines)
 
-class Inferencer(object):
-    """
-    Loads up a model for inferencing
-    """
-    def __init__(self, dname, gamma=30, blend=0.8, leaf_probs=False):
-        with file(os.path.join(dname, 'settings')) as f:
-            self.__dict__.update(json.load(f))
-
-        self.gamma = gamma
-        self.blend = blend
-        self.leaf_probs = leaf_probs
-
-        forest = IForest(dname, self.n_trees, self.n_labels)
-        if self.leaf_classifiers:
-            lc = LeafComputer(dname)
-            predictor = Blender(forest, lc)
-        else:
-            predictor = IForestBlender(forest)
-
-        self.predictor = predictor
-
-    def predict(self, X, fmt='sparse'):
-        assert fmt in ('sparse', 'dict')
-        s = []
-        num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
-        for i in xrange(num):
-            Xi = X[i]
-            mean = self.predictor.predict(Xi.data, Xi.indices, self.blend, self.gamma, self.leaf_probs)
-
-            if fmt == 'sparse':
-                s.append(mean)
-
-            else:
-                od = OrderedDict()
-                for idx in reversed(mean.data.argsort()):
-                    od[mean.indices[idx]] = mean.data[idx]
-                
-                s.append(od)
-
-        if fmt == 'sparse':
-            return sp.vstack(s)
-
-        return s
-        
+ 
 class Trainer(object):
 
     def __init__(self, n_trees=1, max_leaf_size=10, max_labels_per_leaf=20,
@@ -288,13 +226,6 @@ class Trainer(object):
 
         return clf, CLF(clf.coef_, clf.intercept_)
 
-    def __reduce__(self):
-        d = self.__dict__.copy()
-        return (FastXML, (), d)
-
-    def __setstate__(self, d):
-        self.__dict__.update(d)
-
     def _save_trees(self, dname):
         for i, tree in enumerate(self.roots):
             fname = lambda x: os.path.join(dname, 'tree.%s.%s' % (i, x))
@@ -339,10 +270,9 @@ class Trainer(object):
                 out.write('\n')
 
     def _save_settings(self, dname):
-        import json
         settings = {}
         for k, v in self.__dict__.iteritems():
-            if k == 'roots' or k == 'predictor' or k.endswith('_'): 
+            if k == 'roots' or k.endswith('_'): 
                 continue
 
             settings[k] = v
@@ -363,23 +293,6 @@ class Trainer(object):
         # Save leaf classifiers
         if self.leaf_classifiers:
             self._save_leaf_classifiers(dname)
-
-    @staticmethod
-    def load(dname):
-        clf = FastXML()
-        with file(os.path.join(dname, 'settings')) as f:
-            clf.__dict__.update(json.load(f))
-
-        forest = IForest(dname, clf.n_trees, clf.n_labels)
-        if clf.leaf_classifiers:
-            lc = LeafComputer(dname)
-            predictor = Blender(forest, lc)
-        else:
-            predictor = IForestBlender(forest)
-
-        clf.predictor = predictor
-
-        return clf
 
     def resplit_data(self, X, idxs, clf, classes):
         X_train = self.build_X(X, idxs)
@@ -444,68 +357,6 @@ class Trainer(object):
 
         return Node(lNode, rNode, clff.w, clff.b)
 
-    def _predict_fast(self, X):
-        return self.predictor.predict(X.data, X.indices, self.blend, self.gamma, self.leaf_probs)
-
-    def _predict_opt(self, X):
-        probs = []
-        for tree in self.roots:
-            probs.append(tree.predictor.predict(X.data, X.indices))
-
-        ret = np.zeros(probs[0].shape[1], dtype='float32')
-        sparse_mean_32(probs, ret)
-        return sp.csr_matrix(ret)
-
-    def _add_leaf_probs(self, X, ypi):
-        Xn = norm(self.norms_, X)
-        indices = ypi.indices
-
-        lyp = compute_leafs(self.gamma, Xn.data, Xn.indices, indices, self.uxs_, self.xr_)
-
-        # Blend leaf and tree probabilities
-        if self.blend == 0.0:
-            def f():
-                return (1 - self.blend) * np.array(lyp)
-
-        elif self.leaf_probs:
-            def f():
-                nps = (self.blend * ypi.data + (1 - self.blend) * np.array(lyp)) / 2.
-                return nps
-
-        else:
-            def f():
-                nps = self.blend * np.log(ypi.data) + (1 - self.blend) * np.log(np.array(lyp))
-                return nps
-
-        return sp.csr_matrix((f(), ([0] * len(lyp), indices)))
-
-    def predict(self, X, fmt='sparse'):
-        assert fmt in ('sparse', 'dict')
-        s = []
-        num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
-        for i in xrange(num):
-            if hasattr(self, 'predictor'):
-                mean = self._predict_fast(X[i])
-            else:
-                mean = self._predict_opt(X[i])
-                if self.leaf_classifiers and self.blend < 1:
-                    mean = self._add_leaf_probs(X[i], mean)
-
-            if fmt == 'sparse':
-                s.append(mean)
-
-            else:
-                od = OrderedDict()
-                for idx in reversed(mean.data.argsort()):
-                    od[mean.indices[idx]] = mean.data[idx]
-                
-                s.append(od)
-
-        if fmt == 'sparse':
-            return sp.vstack(s)
-
-        return s
-        
     def generate_idxs(self, dataset_len):
         if self.subsample == 1:
             return repeat(range(dataset_len))
@@ -605,10 +456,7 @@ class Trainer(object):
 
         b = np.array(bs, dtype='float32') 
         t = np.array(tree, dtype='uint32') 
-        return Tree(rootIdx, W_stack, 
-                b,
-                t,
-                probs)
+        return Tree(rootIdx, W_stack, b, t, probs)
 
     def fit(self, X, y, weights=None):
         self.roots = self._build_roots(X, y, weights)
@@ -678,76 +526,4 @@ def compute_unit_norms(X):
     norms[np.where(norms == 0)] = 1.0
     return norms.astype('float32')
 
-class MetricNode(object):
-    __slots__ = ('left', 'right')
-    is_leaf = False
-    
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
 
-    @property
-    def idxs(self):
-        return self.left.idxs + self.right.idxs
-
-    def build_discrete(self):
-        _, res = self._build_discrete(0)
-        return res
-
-    def _build_discrete(self, n=0):
-        n2, left = self.left._build_discrete(n)
-        n3, right = self.right._build_discrete(n2 + 1)
-        return n3, left + right
-
-    def build_probs(self, w):
-        _, probs = self._build_probs(w)
-        return [p for lidx, p in probs]
-
-    def _build_probs(self, w, n=0):
-        n2, left = self.left._build_probs(w, n)
-        n3, right = self.right._build_probs(w, n2 + 1)
-        return n3, left + right
-
-class MetricLeaf(object):
-    __slots__ = ('idxs')
-    is_leaf = True
-
-    def __init__(self, idxs):
-        self.idxs = idxs
-
-    def build_discrete(self):
-        return self._build_discrete(0)[1]
-
-    def _build_discrete(self, n=0):
-        return n, [(n, self.idxs)]
-
-    def _build_probs(self, w, n=0):
-        ys = Counter(y for idx in self.idxs for y in w[idx])
-        total = len(self.idxs)
-        return n, [(n, {k: v / float(total) for k, v in ys.iteritems()})]
-
-def metric_cluster(y, weights=None, max_leaf_size=10, 
-        sparse_multiple=25, seed=2016, verbose=False):
-
-    rs = np.random.RandomState(seed=seed)
-    n_labels = max(yi for ys in y for yi in ys) + 1
-    if weights is None:
-        weights = np.ones(n_labels, dtype='float32')
-
-    # Initialize splitter
-    splitter = Splitter(y, weights, sparse_multiple)
-
-    def _metric_cluster(idxs):
-        if verbose and len(idxs) > 1000:
-            print "Splitting:", len(idxs)
-
-        if len(idxs) < max_leaf_size:
-            return MetricLeaf(idxs)
-
-        left, right = splitter.split_node(idxs, rs)
-        if not left or not right:
-            return MetricLeaf(idxs)
-
-        return MetricNode(_metric_cluster(left), _metric_cluster(right))
-
-    return _metric_cluster(range(len(y)))

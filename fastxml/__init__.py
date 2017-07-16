@@ -1,1 +1,1 @@
-from .fastxml import FastXML
+from .fastxml import Trainer, Inferencer
