@@ -8,7 +8,6 @@ import threading
 from collections import defaultdict, Counter
 import multiprocessing
 from itertools import islice, chain, count
-import cPickle
 
 import argparse
 
@@ -16,8 +15,7 @@ import numpy as np
 from sklearn.feature_extraction import FeatureHasher
 import scipy.sparse as sp
 
-from fastxml import FastXML
-from fastxml.fastxml import metric_cluster
+from fastxml import Inferencer, Trainer, metric_cluster
 from fastxml.weights import uniform, nnllog, propensity, logexp
 from fastxml.metrics import ndcg, precision, pSndcg
 
@@ -89,9 +87,6 @@ def build_repl_parser(parser):
     )
     parser.add_argument("--leaf-probs", dest="leafProbs", type=lambda x: x.lower() == "true",
         help="Overrides whether to show log vs P(Y|X)"
-    )
-    parser.add_argument("--tree", type=lambda x: map(int, x.split(',')),
-        help="Tests a particular tree set in the ensemble.  Default is all"
     )
 
 def build_inference_parser(parser):
@@ -412,7 +407,7 @@ def train(args, quantizer):
             out.write("%s,%s\n" % (i, w))
 
     # Train
-    clf = FastXML(
+    clf = Trainer(
         n_trees=args.trees,
         max_leaf_size=args.max_leaf_size,
         max_labels_per_leaf=args.max_labels_per_leaf,
@@ -424,22 +419,18 @@ def train(args, quantizer):
         subsample=args.subsample,
         loss=args.loss,
         leaf_classifiers=args.leaf_class,
-        blend=args.blend_factor,
-        gamma=args.gamma,
         n_jobs=args.threads,
         optimization=args.optimization,
         eps=args.eps,
         C=args.C,
         engine=args.engine,
         auto_weight=args.auto_weight,
-        leaf_probs=args.leafProbs,
         verbose=args.verbose
     )
 
     clf.fit(X_train, y_train, weights=weights)
 
-    with file(dataset.model, 'w') as out:
-        cPickle.dump(clf, out, cPickle.HIGHEST_PROTOCOL)
+    clf.save(dataset.model)
 
     sys.exit(0)
 
@@ -502,7 +493,7 @@ def inference(args, quantizer):
     precs = []
     pndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
-        y_hat = clf.predict(X, 'dict', args.tree)[0]
+        y_hat = clf.predict(X, 'dict')[0]
         yi    = islice(y_hat.iteritems(), args.max_predict)
         nvals = [[unicode(classes[k]), float(v)] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals
@@ -575,8 +566,7 @@ def cluster(args, quantizer):
     
 def load_clf(dataset, args):
 
-    with file(dataset.model) as f:
-        clf = cPickle.load(f)
+    clf = Inferencer(dataset.model)
 
     if args.blend_factor is not None:
         clf.blend = args.blend_factor
