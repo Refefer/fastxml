@@ -2,6 +2,7 @@ import os
 import multiprocessing
 import time
 import json
+import struct
 from math import ceil
 from itertools import repeat, izip
 from contextlib import closing
@@ -50,30 +51,28 @@ class Tree(object):
         self.probs = probs
 
 def sparse_rows_iter(sparse):
-    if str(sparse.dtype) == 'float32':
-        fmt = "{0:d}:{1:.9g}"
-    elif str(sparse.dtype) == 'float64':
-        fmt = "{0:d}:{1:.15g}" 
-    else:
-        raise TypeError("Can only handle f32 and f64 data types")
-
     indptr, indices, data = sparse.indptr, sparse.indices, sparse.data
     for startIdx in xrange(indptr.shape[0] - 1):
         start, stop = indptr[startIdx], indptr[startIdx+1]
+
         sparse_lines = []
         for i in xrange(start, stop):
-            sparse_lines.append(fmt.format(indices[i], data[i]))
+            sparse_lines.append(indices[i])
+            sparse_lines.append(data[i])
+        
+        # Pack into struct
+        n = stop - start
+        size = struct.pack('I', n)
+        rest = struct.pack('If' * n, *sparse_lines)
 
-        yield ' '.join(sparse_lines)
+        yield size + rest
 
-def dense_rows_iter(dense):
+def dense_rows_iter(dense, dtype='f'):
+    n = dense.shape[1]
+    size = struct.pack('I', n)
     for i in xrange(dense.shape[0]):
-        dense_lines = []
-        for j in xrange(dense.shape[1]):
-            dense_lines.append("{0:.9g}".format(dense[i,j]))
-
-        yield ' '.join(dense_lines)
-
+        rest = struct.pack(dtype * n, *dense[i])
+        yield size + rest
  
 class Trainer(object):
 
@@ -231,42 +230,41 @@ class Trainer(object):
 
             # Write out dense tree
             with file(fname('tree'), 'w') as out:
-                for line in dense_rows_iter(tree.tree):
+                for line in dense_rows_iter(tree.tree, 'I'):
                     out.write(line)
-                    out.write('\n')
 
             # Write out weights
             with file(fname('weights'), 'w') as out:
                 for line in sparse_rows_iter(tree.W):
                     out.write(line)
-                    out.write('\n')
 
             # Write bias
             with file(fname('bias'), 'w') as out:
-                out.write(' '.join('{:.9g}'.format(b) for b in tree.b))
+                for line in dense_rows_iter(tree.b.reshape((1,-1))):
+                    out.write(line)
 
             # Write Probabilities
             with file(fname('probs'), 'w') as out:
                 for p in tree.probs:
                     for line in sparse_rows_iter(p):
                         out.write(line)
-                        out.write('\n')
 
     def _save_leaf_classifiers(self, dname):
         fname = lambda x: os.path.join(dname, 'lc.%s' % x)
         # Save l2 norms
         with file(fname('norms'), 'w') as out:
-            out.write(' '.join('{:.9g}'.format(n) for n in self.norms_))
+            for line in dense_rows_iter(self.norms_.reshape((1,-1))):
+                out.write(line)
 
         # Save Radii
         with file(fname('radii'), 'w') as out:
-            out.write(' '.join('{:.9g}'.format(r) for r in self.xr_))
+            for line in dense_rows_iter(self.xr_.reshape((1,-1))):
+                out.write(line)
 
         # Save means
         with file(fname('means'), 'w') as out:
             for line in sparse_rows_iter(self.uxs_):
                 out.write(line)
-                out.write('\n')
 
     def _save_settings(self, dname):
         settings = {}

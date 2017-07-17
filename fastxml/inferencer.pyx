@@ -2,6 +2,7 @@
 
 import numpy as np
 import scipy.sparse as sp
+import struct
 
 cimport cython
 cimport numpy as np
@@ -102,40 +103,64 @@ cdef SR sparse_sr_mean(const vector[SR*] probs, SR& averaged):
 
     return averaged
 
+cdef object read_row(object f, str type):
+    d = f.read(struct.calcsize('I'))
+    if not d: 
+        return None
+
+    # Get size of row, and unpack entire pair set
+    num, = struct.unpack("I", d)
+    d2 = f.read(num * struct.calcsize(type))
+
+    return struct.unpack(type * num, d2)
+
 cdef void load_sparse(str fname, CSR& csr):
     cdef SR row
     cdef DP p
+    cdef int i
     with open(fname) as f:
-        for line in f:
+        while True:
+            values = read_row(f, 'If')
+            if values is None:
+                break
+
             row = vector[DP]()
-            pieces = line.strip().split()
-            for piece in pieces:
-                index, weight = piece.split(':')
-                p.first = int(index)
-                p.second = float(weight)
+            for i in range(0, len(values), 2):
+                p.first = values[i]
+                p.second = values[i+1]
                 row.push_back(p)
 
             csr.push_back(row)
 
 cdef load_dense_f32(str fname, DENSE& dense):
     cdef vector[float] row
+    cdef int i
     with open(fname) as f:
-        for line in f:
+        while True:
+            values = read_row(f, 'f')
+            if values is None:
+                break
+
             row = vector[float]()
-            pieces = line.strip().split()
-            for weight in pieces:
-                row.push_back(float(weight))
+
+            # Get size of row, and unpack floats
+            for i in range(0, len(values)):
+                row.push_back(values[i])
 
             dense.push_back(row)
 
 cdef load_dense_int(str fname, vector[vector[int]]& dense):
     cdef vector[int] row
+    cdef int i
     with open(fname) as f:
-        for line in f:
-            row = vector[int]()
-            pieces = line.strip().split()
-            for weight in pieces:
-                row.push_back(int(weight))
+
+        while True:
+            values = read_row(f, 'f')
+            if values is None:
+                break
+
+            for i in range(0, len(values)):
+                row.push_back(values[i])
 
             dense.push_back(row)
 
