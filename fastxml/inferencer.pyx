@@ -155,9 +155,11 @@ cdef load_dense_int(str fname, vector[vector[int]]& dense):
     with open(fname) as f:
 
         while True:
-            values = read_row(f, 'f')
+            values = read_row(f, 'I')
             if values is None:
                 break
+
+            row = vector[int]()
 
             for i in range(0, len(values)):
                 row.push_back(values[i])
