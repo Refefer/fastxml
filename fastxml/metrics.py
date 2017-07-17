@@ -22,7 +22,12 @@ def pSdcg(scores, props, k=None):
     if k is not None:
         scores = scores[:k]
 
-    return sum(rl / (props[i] * math.log(i + 2)) for i, rl in enumerate(scores))
+    k = 0
+    for i, rl in enumerate(scores):
+        p = props[i] if i < len(props) else 1
+        k += rl / (p * math.log(i + 2))
+    
+    return k
 
 def pSndcg(scores, props, k=None):
     dcgs = pSdcg(scores, props, k)

@@ -198,7 +198,6 @@ class Trainer(object):
         else:
             penalty = 'l2'
 
-        
         X_train, y_train = self.build_XY(X, idxss, rs)
 
         in_liblinear = X_train.shape[0] > (self.auto_weight * self.max_leaf_size)

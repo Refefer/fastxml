@@ -102,7 +102,7 @@ cdef SR sparse_sr_mean(const vector[SR*] probs, SR& averaged):
 
     return averaged
 
-cdef load_sparse(str fname, CSR& csr):
+cdef void load_sparse(str fname, CSR& csr):
     cdef SR row
     cdef DP p
     with open(fname) as f:
