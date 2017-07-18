@@ -1,10 +1,16 @@
+from __future__ import division
+from __future__ import print_function
+from builtins import next
+from builtins import range
+from past.utils import old_div
+from builtins import object
 import os
 import multiprocessing
 import time
 import json
 import struct
 from math import ceil
-from itertools import repeat, izip
+from itertools import repeat
 from contextlib import closing
 from collections import Counter, defaultdict
 
@@ -52,11 +58,11 @@ class Tree(object):
 
 def sparse_rows_iter(sparse):
     indptr, indices, data = sparse.indptr, sparse.indices, sparse.data
-    for startIdx in xrange(indptr.shape[0] - 1):
+    for startIdx in range(indptr.shape[0] - 1):
         start, stop = indptr[startIdx], indptr[startIdx+1]
 
         sparse_lines = []
-        for i in xrange(start, stop):
+        for i in range(start, stop):
             sparse_lines.append(indices[i])
             sparse_lines.append(data[i])
         
@@ -70,7 +76,7 @@ def sparse_rows_iter(sparse):
 def dense_rows_iter(dense, dtype='f'):
     n = dense.shape[1]
     size = struct.pack('I', n)
-    for i in xrange(dense.shape[0]):
+    for i in range(dense.shape[0]):
         rest = struct.pack(dtype * n, *dense[i])
         yield size + rest
  
@@ -122,7 +128,7 @@ class Trainer(object):
 
     def split_node(self, idxs, splitter, rs):
         if self.verbose and len(idxs) > 1000:
-            print "Splitting {}".format(len(idxs))
+            print("Splitting {}".format(len(idxs)))
 
         return splitter.split_node(idxs, rs)
 
@@ -133,7 +139,7 @@ class Trainer(object):
         for l, val in counter.most_common(self.max_labels_per_leaf):
             i.append(0)
             j.append(l)
-            v.append(val / total)
+            v.append(old_div(val, total))
 
         return sp.csr_matrix((v, (i, j)), shape=(1, ml)).astype('float32')
 
@@ -184,7 +190,7 @@ class Trainer(object):
 
         # Rules of Thumb state that SGD needs ~1mm updates to converge
         # That would take _forever_, so we set it 100 by default
-        n_epochs = int(ceil(self.n_updates / N))
+        n_epochs = int(ceil(old_div(self.n_updates, N)))
         assert n_epochs > 0
         return n_epochs
 
@@ -268,7 +274,7 @@ class Trainer(object):
 
     def _save_settings(self, dname):
         settings = {}
-        for k, v in self.__dict__.iteritems():
+        for k, v in self.__dict__.items():
             if k == 'roots' or k.endswith('_'): 
                 continue
 
@@ -293,7 +299,7 @@ class Trainer(object):
 
     def resplit_data(self, X, idxs, clf, classes):
         X_train = self.build_X(X, idxs)
-        new_idxs = [[] for _ in xrange(classes)]
+        new_idxs = [[] for _ in range(classes)]
         for i, k in enumerate(clf.predict(X_train)):
             new_idxs[k].append(idxs[i])
 
@@ -306,7 +312,7 @@ class Trainer(object):
         if l_idx and r_idx:
             # Train the classifier
             if self.verbose and len(idxs) > 1000:
-                print "Training classifier"
+                print("Training classifier")
 
             clf, clf_fast = self.train_clf(X, [l_idx, r_idx], rs)
 
@@ -333,7 +339,7 @@ class Trainer(object):
             return Leaf(self.compute_probs(y, idxs, splitter.max_label))
 
         # Resplit the data
-        for tries in xrange(self.re_split):
+        for tries in range(self.re_split):
 
             if clf is not None:
                 l_idx, r_idx = self.resplit_data(X, idxs, clf, 2)
@@ -341,7 +347,7 @@ class Trainer(object):
             if l_idx and r_idx: break
 
             if self.verbose and len(idxs) > 1000:
-                print "Re-splitting {}".format(len(idxs))
+                print("Re-splitting {}".format(len(idxs)))
 
             l_idx, r_idx, (clf, clff) = self.split_train(
                     X, idxs, splitter, rs)
@@ -356,7 +362,7 @@ class Trainer(object):
 
     def generate_idxs(self, dataset_len):
         if self.subsample == 1:
-            return repeat(range(dataset_len))
+            return repeat(list(range(dataset_len)))
 
         batch_size = int(dataset_len * self.subsample) \
                 if self.subsample < 1 else self.subsample
@@ -366,7 +372,7 @@ class Trainer(object):
 
         def gen(bs):
             rs = np.random.RandomState(seed=self.seed + 1000)
-            idxs = range(dataset_len)
+            idxs = list(range(dataset_len))
             while True:
                 rs.shuffle(idxs)
                 yield idxs[:bs]
@@ -393,7 +399,7 @@ class Trainer(object):
 
         procs = []
         finished = []
-        counter = iter(xrange(self.n_trees))
+        counter = iter(range(self.n_trees))
         idxs = self.generate_idxs(len(X))
         while len(finished) < self.n_trees:
             if len(procs) < self.n_jobs and (len(procs) + len(finished)) < self.n_trees :
@@ -464,22 +470,22 @@ class Trainer(object):
         dd = defaultdict(list)
         norms = compute_unit_norms(X)
         ml = 0
-        for Xi, yis in izip(X, y):
+        for Xi, yis in zip(X, y):
             Xin = norm(norms, Xi)
             for yi in yis:
                 dd[yi].append(Xin)
                 ml = max(yi, ml)
 
         if self.verbose:
-            print "Computing means and radius for hard margin"
+            print("Computing means and radius for hard margin")
 
         xmeans = []
         xrs = []
         with closing(multiprocessing.Pool(processes=self.n_jobs)) as p:
-            it = ((i, dd[i], self.leaf_eps) for i in xrange(ml + 1))
+            it = ((i, dd[i], self.leaf_eps) for i in range(ml + 1))
             for k, ux, r in p.imap(compute_leaf_metrics, it, 100):
                 if self.verbose and k % 100 == 0:
-                    print "Training leaf classifier: %s of %s" % (k, ml)
+                    print("Training leaf classifier: %s of %s" % (k, ml))
 
                 if ux is None:
                     ux = sp.csr_matrix((1, X[0].shape[1])).astype('float64')
@@ -505,7 +511,7 @@ def compute_leaf_metrics(data):
         ux = sparsify(v.reshape((1, -1)), eps=eps).astype('float64')
 
     elif len(Xs) > 1:
-        ux = sum(Xs) / len(Xs)
+        ux = old_div(sum(Xs), len(Xs))
 
     else:
         return i, None, 0.0
@@ -570,7 +576,7 @@ class MetricLeaf(object):
     def _build_probs(self, w, n=0):
         ys = Counter(y for idx in self.idxs for y in w[idx])
         total = len(self.idxs)
-        return n, [(n, {k: v / float(total) for k, v in ys.iteritems()})]
+        return n, [(n, {k: old_div(v, float(total)) for k, v in ys.items()})]
 
 def metric_cluster(y, weights=None, max_leaf_size=10, 
         sparse_multiple=25, seed=2016, verbose=False):
@@ -585,7 +591,7 @@ def metric_cluster(y, weights=None, max_leaf_size=10,
 
     def _metric_cluster(idxs):
         if verbose and len(idxs) > 1000:
-            print "Splitting:", len(idxs)
+            print("Splitting:", len(idxs))
 
         if len(idxs) < max_leaf_size:
             return MetricLeaf(idxs)
@@ -596,4 +602,4 @@ def metric_cluster(y, weights=None, max_leaf_size=10,
 
         return MetricNode(_metric_cluster(left), _metric_cluster(right))
 
-    return _metric_cluster(range(len(y)))
+    return _metric_cluster(list(range(len(y))))

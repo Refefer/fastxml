@@ -1,3 +1,5 @@
+from builtins import range
+from builtins import object
 import os
 import json
 from collections import OrderedDict
@@ -31,7 +33,7 @@ class Inferencer(object):
         assert fmt in ('sparse', 'dict')
         s = []
         num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
-        for i in xrange(num):
+        for i in range(num):
             Xi = X[i]
             mean = self.predictor.predict(Xi.data, Xi.indices, 
                     self.blend, self.gamma, self.leaf_probs)

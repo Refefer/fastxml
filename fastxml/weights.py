@@ -1,3 +1,6 @@
+from __future__ import division
+from builtins import range
+from past.utils import old_div
 from collections import Counter
 import numpy as np
 
@@ -17,7 +20,7 @@ def propensity(y, A=0.55, B=1.5):
     N, Nl, ml = metrics(y)
     C = (np.log(N) - 1) * (B + 1) ** A
     weights = []
-    for i in xrange(ml):
+    for i in range(ml):
         weights.append(1 + C * (Nl.get(i, 0) + B) ** -A)
 
     return np.array(weights, dtype='float32')
@@ -27,9 +30,9 @@ def nnllog(y, a=1, b=0):
     N = float(N)
 
     weights = []
-    for i in xrange(ml):
+    for i in range(ml):
         if i in Nl:
-            weights.append(a * np.log(N / Nl[i]) + b)
+            weights.append(a * np.log(old_div(N, Nl[i])) + b)
         else:
             weights.append(0)
 
@@ -38,7 +41,7 @@ def nnllog(y, a=1, b=0):
 def logexp(y, a=1, b=1):
     N, Nl, ml = metrics(y)
     weights = []
-    for i in xrange(ml):
+    for i in range(ml):
         if i in Nl:
             weights.append(a * np.log(1 + Nl[i]) ** -b)
         else:

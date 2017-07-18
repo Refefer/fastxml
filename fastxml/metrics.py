@@ -1,13 +1,16 @@
+from __future__ import division
+from builtins import range
+from past.utils import old_div
 import math
 
 def precision(scores, k):
-    return sum(scores[:k]) / float(k)
+    return old_div(sum(scores[:k]), float(k))
 
 def dcg(scores, k=None):
     if k is not None:
         scores = scores[:k]
 
-    return sum(rl / math.log(i + 2) for i, rl in enumerate(scores))
+    return sum(old_div(rl, math.log(i + 2)) for i, rl in enumerate(scores))
 
 def ndcg(scores, k=None, eps=1e-6):
     idcgs = dcg(sorted(scores, reverse=True), k)
@@ -16,7 +19,7 @@ def ndcg(scores, k=None, eps=1e-6):
 
     dcgs = dcg(scores, k)
 
-    return dcgs / idcgs
+    return old_div(dcgs, idcgs)
 
 def pSdcg(scores, props, k=None):
     if k is not None:
@@ -25,15 +28,15 @@ def pSdcg(scores, props, k=None):
     k = 0
     for i, rl in enumerate(scores):
         p = props[i] if i < len(props) else 1
-        k += rl / (p * math.log(i + 2))
+        k += old_div(rl, (p * math.log(i + 2)))
     
     return k
 
 def pSndcg(scores, props, k=None):
     dcgs = pSdcg(scores, props, k)
 
-    denom = sum(1. / math.log(i + 2) for i in xrange(k or len(scores)))
+    denom = sum(old_div(1., math.log(i + 2)) for i in range(k or len(scores)))
 
-    return dcgs / denom
+    return old_div(dcgs, denom)
 
 
