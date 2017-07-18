@@ -11,6 +11,15 @@ DiSMEC makes it's appearance via an L2 penalty rather than an L1 which, when set
 
 It's implemented in the quasi-familiar scikit-learn clf format.
 
+Release Notes
+===
+2.0
+---
+ - Version 2.0 is _not_ backward compatible with 1.x
+ - User model.save(path) to save models instead of cPickle
+ - Rewrites data storage layer
+ - Uses 50% the memory, loads 30% faster, and is 40% faster to inference
+
 Binary
 ===
 
@@ -50,14 +59,18 @@ Not the omission of the flags "--standard-dataset" and "--no-remap-labels".  Sin
 Simple Python Usage
 ===
 
-    from fastxml import FastXML
+    from fastxml import Trainer, Inferencer
 
     X = [Sparse or numpy arrays]
     y = [[1, 3]] # Currently requires list[list[int]]
 
-    clf = FastXML(n_trees=32, n_jobs=-1)
+    trainer = Trainer(n_trees=32, n_jobs=-1)
 
-    clf.fit(X, y)
+    trainer.fit(X, y)
+
+    trainer.save(path)
+
+    clf = Inferencer(path)
 
     clf.predict(X)
     # or
@@ -70,13 +83,13 @@ Simple Python Usage
     from fastxml.weights import propensity
 
     weights = propensity(y)
-    clf.fit(X, y, weights)
+    trainer.fit(X, y, weights)
     
     ###############
     # PFastreXML
     ###############
-    clf = FastXML(n_trees=32, n_jobs=-1, leaf_classifiers=True)
-    clf.fit(X, y, weights)
+    trainer = Trainer(n_trees=32, n_jobs=-1, leaf_classifiers=True)
+    trainer.fit(X, y, weights)
 
 TODO
 ===

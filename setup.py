@@ -30,7 +30,7 @@ extensions = [
 ]
 
 setup(name='fastxml',
-      version="1.0.5",
+      version="2.0.0",
       description='FastXML Extreme Multi-label Classification Algorithm',
       url="https://github.com/refefer/fastxml",
       author_email="refefer@gmail.com",
