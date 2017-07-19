@@ -46,6 +46,7 @@ setup(name='fastxml',
         "scipy>=0.13.3",
         "scikit-learn>=0.17",
         "Cython>=0.23.4",
+        "future>=0.16.0"
       ],
       classifiers=[
        "License :: OSI Approved :: Apache Software License",
