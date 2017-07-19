@@ -13,7 +13,7 @@ class Inferencer(object):
     Loads up a model for inferencing
     """
     def __init__(self, dname, gamma=30, blend=0.8, leaf_probs=False):
-        with file(os.path.join(dname, 'settings')) as f:
+        with open(os.path.join(dname, 'settings'), 'rt') as f:
             self.__dict__.update(json.load(f))
 
         self.gamma = gamma
