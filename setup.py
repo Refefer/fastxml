@@ -5,7 +5,6 @@ from setuptools import setup
 from setuptools.command.build_ext import build_ext as _build_ext
 
 from distutils.extension import Extension
-from Cython.Distutils import build_ext
 
 class build_ext(_build_ext):
     """
