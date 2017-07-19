@@ -235,22 +235,22 @@ class Trainer(object):
             fname = lambda x: os.path.join(dname, 'tree.%s.%s' % (i, x))
 
             # Write out dense tree
-            with file(fname('tree'), 'w') as out:
+            with open(fname('tree'), 'wb') as out:
                 for line in dense_rows_iter(tree.tree, 'I'):
                     out.write(line)
 
             # Write out weights
-            with file(fname('weights'), 'w') as out:
+            with open(fname('weights'), 'wb') as out:
                 for line in sparse_rows_iter(tree.W):
                     out.write(line)
 
             # Write bias
-            with file(fname('bias'), 'w') as out:
+            with open(fname('bias'), 'wb') as out:
                 for line in dense_rows_iter(tree.b.reshape((1,-1))):
                     out.write(line)
 
             # Write Probabilities
-            with file(fname('probs'), 'w') as out:
+            with open(fname('probs'), 'wb') as out:
                 for p in tree.probs:
                     for line in sparse_rows_iter(p):
                         out.write(line)
@@ -258,17 +258,17 @@ class Trainer(object):
     def _save_leaf_classifiers(self, dname):
         fname = lambda x: os.path.join(dname, 'lc.%s' % x)
         # Save l2 norms
-        with file(fname('norms'), 'w') as out:
+        with open(fname('norms'), 'wb') as out:
             for line in dense_rows_iter(self.norms_.reshape((1,-1))):
                 out.write(line)
 
         # Save Radii
-        with file(fname('radii'), 'w') as out:
+        with open(fname('radii'), 'wb') as out:
             for line in dense_rows_iter(self.xr_.reshape((1,-1))):
                 out.write(line)
 
         # Save means
-        with file(fname('means'), 'w') as out:
+        with open(fname('means'), 'wb') as out:
             for line in sparse_rows_iter(self.uxs_):
                 out.write(line)
 
@@ -280,7 +280,7 @@ class Trainer(object):
 
             settings[k] = v
 
-        with open(os.path.join(dname, 'settings'), 'w') as out:
+        with open(os.path.join(dname, 'settings'), 'wt') as out:
             json.dump(settings, out)
 
     def save(self, dname):
