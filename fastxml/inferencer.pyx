@@ -118,7 +118,7 @@ cdef void load_sparse(str fname, CSR& csr):
     cdef SR row
     cdef DP p
     cdef int i
-    with open(fname) as f:
+    with open(fname, 'rb') as f:
         while True:
             values = read_row(f, 'If')
             if values is None:
@@ -135,7 +135,7 @@ cdef void load_sparse(str fname, CSR& csr):
 cdef load_dense_f32(str fname, DENSE& dense):
     cdef vector[float] row
     cdef int i
-    with open(fname) as f:
+    with open(fname, 'rb') as f:
         while True:
             values = read_row(f, 'f')
             if values is None:
@@ -152,7 +152,7 @@ cdef load_dense_f32(str fname, DENSE& dense):
 cdef load_dense_int(str fname, vector[vector[int]]& dense):
     cdef vector[int] row
     cdef int i
-    with open(fname) as f:
+    with open(fname, 'rb') as f:
 
         while True:
             values = read_row(f, 'I')

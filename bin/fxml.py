@@ -1,5 +1,14 @@
 #!/usr/bin/env python
 from __future__ import print_function
+from __future__ import division
+from builtins import zip
+from builtins import input
+from builtins import map
+from builtins import next
+from builtins import str
+from builtins import range
+from past.utils import old_div
+from builtins import object
 import sys
 import json
 import pprint
@@ -235,7 +244,7 @@ class JsonQuantizer(Quantizer):
         return self.fh.transform([d])
 
     def yieldJson(self, fname):
-        with file(fname) as f:
+        with open(fname, 'rt') as f:
             for i, line in enumerate(f):
                 if self.verbose and i % 10000 == 0:
                     print("%s docs encoded" % i)
@@ -295,7 +304,7 @@ class StandardDatasetQuantizer(Quantizer):
             classes, sparse = line.strip().split(None, 1) 
 
         if classes:
-            y = map(int, classes.split(','))
+            y = list(map(int, classes.split(',')))
         else:
             y = []
 
@@ -311,8 +320,8 @@ class StandardDatasetQuantizer(Quantizer):
         return (c, d), y
 
     def stream(self, fn, no_features=False):
-        with file(fn) as f:
-            n_samples, n_feats, n_classes = map(int, f.readline().split())
+        with open(fn, 'rt') as f:
+            n_samples, n_feats, n_classes = list(map(int, f.readline().split()))
             for i, line in enumerate(f):
                 if i == 0:
                     continue
@@ -398,11 +407,11 @@ def train(args, quantizer):
     if not os.path.isdir(args.model):
         os.makedirs(args.model)
 
-    with file(dataset.classes, 'w') as out:
-        json.dump(classes.items(), out)
+    with open(dataset.classes, 'wt') as out:
+        json.dump(list(classes.items()), out)
 
     weights = compute_weights(y_train, args.label_weight, args.label_weight_hp)
-    with file(dataset.weights, 'w') as out:
+    with open(dataset.weights, 'wt') as out:
         for i, w in enumerate(weights):
             out.write("%s,%s\n" % (i, w))
 
@@ -453,23 +462,23 @@ def compute_weights(y_train, label_weight, hps):
 
 def print_metrics(ndcgs, precs, pndcgs, toStderr):
     fout = sys.stderr if toStderr else sys.stdout
-    ndcgT = zip(*ndcgs)
-    precsT = zip(*precs)
-    pndcgT = zip(*pndcgs)
-    for i in xrange(3):
+    ndcgT = list(zip(*ndcgs))
+    precsT = list(zip(*precs))
+    pndcgT = list(zip(*pndcgs))
+    for i in range(3):
         print('P@{}: {}'.format(2 * i + 1, np.mean(precsT[i])), file=fout)
 
-    for i in xrange(3):
+    for i in range(3):
         print('NDCG@{}: {}'.format(2 * i + 1, np.mean(ndcgT[i])), file=fout)
 
-    for i in xrange(3):
+    for i in range(3):
         print('pNDCG@{}: {}'.format(2 * i + 1, np.mean(pndcgT[i])), file=fout)
 
     print(file=fout)
 
 def loadClasses(dataset):
     # Load reverse map
-    with file(dataset.classes) as f:
+    with open(dataset.classes, 'rt') as f:
         data = json.load(f)
         return {v: k for k, v in data}
 
@@ -477,7 +486,7 @@ def loadPropensities(dataset):
     props = []
     with open(dataset.weights) as f:
         for line in f:
-            props.append(1 / float(line.strip().split(',')[1]))
+            props.append(old_div(1, float(line.strip().split(',')[1])))
 
     return props
 
@@ -494,15 +503,15 @@ def inference(args, quantizer):
     pndcgs = []
     for data, X, y in quantizer.stream(args.input_file):
         y_hat = clf.predict(X, 'dict')[0]
-        yi    = islice(y_hat.iteritems(), args.max_predict)
-        nvals = [[unicode(classes[k]), float(v)] for k, v in yi]
+        yi    = islice(iter(y_hat.items()), args.max_predict)
+        nvals = [[str(classes[k]), float(v)] for k, v in yi]
         data['predict'] = dict(nvals) if args.dict else nvals
 
         if args.score:
             ys = set(y)
             scores = []
             props = []
-            for yii in y_hat.iterkeys():
+            for yii in y_hat.keys():
                 props.append(propensities[yii])
                 if classes[yii] in ys:
                     ys.remove(classes[yii])
@@ -540,27 +549,27 @@ def cluster(args, quantizer):
     for y in quantize_y(args, quantizer, classes):
         y_train.append(y)
 
-    classes = {v: k for k, v in classes.iteritems()}
+    classes = {v: k for k, v in classes.items()}
 
     weights = compute_weights(y_train, args.label_weight, args.label_weight_hp)
     trees = []
-    for i in xrange(args.trees):
+    for i in range(args.trees):
         tree = metric_cluster(y_train, weights=weights, 
                 max_leaf_size=args.max_leaf_size,
                 seed=2016 + i, verbose=args.verbose)
 
         d = tree.build_discrete()
         p = tree.build_probs(y_train)
-        with file(cluster_dataset.probs(i), 'w') as out:
+        with open(cluster_dataset.probs(i), 'wt') as out:
             for i, pi in enumerate(p):
-                x = {classes[l]: round(ps, 3) for l, ps in pi.iteritems()}
+                x = {classes[l]: round(ps, 3) for l, ps in pi.items()}
                 print(json.dumps(x), file=out)
 
         td = {idx: tn for tn, idxs in d for idx in idxs}
         trees.append(td)
 
-    with file(cluster_dataset.clusters, 'w') as out:
-        for i in xrange(len(y_train)):
+    with open(cluster_dataset.clusters, 'wt') as out:
+        for i in range(len(y_train)):
             cluster = [t[i] for t in trees]
             print(json.dumps(cluster), file=out)
     
@@ -588,11 +597,11 @@ def repl(args, quantizer):
 
     try:
         while True:
-            title = raw_input("> ")
+            title = input("> ")
             X = quantizer.quantize(title)
             y_hat = clf.predict(X, 'dict')[0]
-            yi = islice(y_hat.iteritems(), args.max_predict)
-            nvals = [[unicode(classes[k]), v] for k, v in yi]
+            yi = islice(iter(y_hat.items()), args.max_predict)
+            nvals = [[str(classes[k]), v] for k, v in yi]
             pprint.pprint(nvals)
 
     except KeyboardInterrupt:

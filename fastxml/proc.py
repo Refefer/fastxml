@@ -1,3 +1,4 @@
+from builtins import object
 import multiprocessing
 
 class Result(object):
