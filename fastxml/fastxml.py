@@ -1,3 +1,5 @@
+from builtins import range
+from builtins import object
 import os
 import json
 from collections import OrderedDict
@@ -11,7 +13,7 @@ class Inferencer(object):
     Loads up a model for inferencing
     """
     def __init__(self, dname, gamma=30, blend=0.8, leaf_probs=False):
-        with file(os.path.join(dname, 'settings')) as f:
+        with open(os.path.join(dname, 'settings'), 'rt') as f:
             self.__dict__.update(json.load(f))
 
         self.gamma = gamma
@@ -31,7 +33,7 @@ class Inferencer(object):
         assert fmt in ('sparse', 'dict')
         s = []
         num = X.shape[0] if isinstance(X, sp.csr_matrix) else len(X)
-        for i in xrange(num):
+        for i in range(num):
             Xi = X[i]
             mean = self.predictor.predict(Xi.data, Xi.indices, 
                     self.blend, self.gamma, self.leaf_probs)
