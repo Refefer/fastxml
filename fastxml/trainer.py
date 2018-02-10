@@ -517,7 +517,7 @@ def compute_unit_norms(X):
     norms = np.zeros(X[0].shape[1])
     for Xi in X:
         for i, ind in enumerate(Xi.indices):
-            norms[ind] = Xi.data[i] ** 2
+            norms[ind] += Xi.data[i] ** 2
 
     norms = norms ** .5
     norms[np.where(norms == 0)] = 1.0
