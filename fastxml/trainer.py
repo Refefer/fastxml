@@ -217,7 +217,7 @@ class Trainer(object):
                         penalty=penalty, random_state=rs)
 
         else:
-            clf = SGDClassifier(loss=self.loss, penalty=penalty, n_iter=n_epochs, 
+            clf = SGDClassifier(loss=self.loss, penalty=penalty, max_iter=n_epochs, 
                     alpha=self.alpha, fit_intercept=self.bias, class_weight='balanced',
                     random_state=rs)
 
