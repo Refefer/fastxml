@@ -4,4 +4,3 @@ venv/
 *.egg-info/
 *.pyc
 *.so
-*.c
