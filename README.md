@@ -82,6 +82,5 @@ Not the omission of the flags "--standard-dataset" and "--no-remap-labels". Sinc
 
     ###############
     # PFastreXML
-    ###############
     trainer = Trainer(n_trees=32, n_jobs=-1, leaf_classifiers=True)
     trainer.fit(X, y, weights)
