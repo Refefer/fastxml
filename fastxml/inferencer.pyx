@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False
+#cython: boundscheck=False, wraparound=False, language_level=2
 
 import numpy as np
 import scipy.sparse as sp

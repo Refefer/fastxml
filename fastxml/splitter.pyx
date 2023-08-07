@@ -1,4 +1,4 @@
-#cython: boundscheck=False, wraparound=False, initializedcheck=False
+#cython: boundscheck=False, wraparound=False, initializedcheck=False, language_level=2
 
 from collections import defaultdict
 import numpy as np
